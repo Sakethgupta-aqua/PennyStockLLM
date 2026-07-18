@@ -1,0 +1,27 @@
+# --- secrets & environment ---
+.env
+
+# --- macOS ---
+.DS_Store
+
+# --- Python ---
+__pycache__/
+*.pyc
+.ipynb_checkpoints/
+*.pkl
+
+# --- large artifacts: models, adapters, vendored code (never push to GitHub) ---
+finetune/adapters/
+llama.cpp-master/
+*.gguf
+*.safetensors
+
+# --- generated data & corpus (too large for GitHub; regenerable/local) ---
+penny_stock_vector_db/
+Penny_stock_PDFS/
+Penny_stock.pdf
+Index_Page_PennyStock_Book/
+
+# --- editor ---
+StockLLM.code-workspace
+.claude/settings.local.json
