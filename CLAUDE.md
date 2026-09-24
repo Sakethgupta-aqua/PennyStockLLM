@@ -30,6 +30,24 @@ retrieval-augmented generation (RAG), fine-tuning, and local inference.
 
 ## Commands
 
+Data caches live in `market.db`. `python scripts/refresh_data.py --status` shows what is stale.
+
+```bash
+# per-stock analysis
+python demo.py "<query>"                                # run the agent graph
+python scripts/check_traces.py                          # Layer-0 assertion pass rates
+
+# screening (offline ingest, then instant ranking)
+python scripts/ingest_metrics.py --index nifty50        # ~3 min / 50 names
+python scripts/ingest_metrics.py --from-universe --resume
+python scripts/screen.py --top 25                       # funnel + ranked shortlist
+python scripts/screen.py --explain HINDALCO             # one stock's scorecard
+
+# corpus + retrieval
+python scripts/ingest_documents.py --no-ocr
+python scripts/eval_rag.py --verified-only
+```
+
 <!-- Record the exact commands you run often, e.g.:
 - Build llama.cpp:  cd llama.cpp-master && make
 - Run notebook server:  jupyter lab
