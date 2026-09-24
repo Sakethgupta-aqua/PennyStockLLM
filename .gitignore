@@ -7,8 +7,11 @@
 # --- Python ---
 __pycache__/
 *.pyc
-.ipynb_checkpoints/
 *.pkl
+*.egg-info/
+.coverage
+.pytest_cache/
+.ipynb_checkpoints/
 
 # --- large artifacts: models, adapters, vendored code (never push to GitHub) ---
 finetune/adapters/
@@ -16,12 +19,27 @@ llama.cpp-master/
 *.gguf
 *.safetensors
 
-# --- generated data & corpus (too large for GitHub; regenerable/local) ---
-penny_stock_vector_db/
+# --- source books & corpus: third-party copyright, too large; stay local ---
 Penny_stock_PDFS/
 Penny_stock.pdf
 Index_Page_PennyStock_Book/
 
-# --- editor ---
+# --- broker research PDFs: third-party copyright, licensed to you for reading only ---
+# Never commit or redistribute these.
+Broker_Reports/
+
+# --- generated data: rebuild with the scripts/ commands, don't version ---
+market.db
+penny_stock_vector_db/
+traces/
+eval/results/
+*.bak
+pennystock/data/resources/lm_lexicon.json
+
+# --- runtime ---
+.refresh.lock
+refresh.log
+
+# --- editor / personal settings ---
 StockLLM.code-workspace
 .claude/settings.local.json
