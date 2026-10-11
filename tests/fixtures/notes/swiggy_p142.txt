@@ -1,0 +1,115 @@
+Annual Report 2025-26 278 279 Swiggy Limited
+(All amounts in ` Crore, unless otherwise stated) (All amounts in ` Crore, unless otherwise stated)
+Notes to the Consolidated Financial Statements (Contd.)
+for the year ended March 31, 2026
+CIN: L74110KA2013PLC096530
+Notes to the Consolidated Financial Statements (Contd.)
+for the year ended March 31, 2026
+CIN: L74110KA2013PLC096530
+Year ended March 31, 2025
+Swiggy ESOP 2015
+April 01, 2024 to
+June 30, 2024*
+Risk free interest rate (% p.a) 6.77%
+Expected life of options granted (years) 4
+Expected volatility (simple average) 42.50%
+Dividend yield (%) -
+Fair value of the option (`) 4,48,474
+Exercise price (`) 1,401
+* The plan has formally sunset and transferred to ESOP 2024 (Refer 33(a)).
+The expected life of stock options is based on historical data and current expectations and is not necessarily indicative
+of exercise patterns that may occur. The expected volatility reflects assumption that the historical volatility over a
+period similar to the life of the options is indicative of future trends, which may also not necessarily be the actual
+outcome.
+34 Commitments and contingencies
+(a) Commitments
+Estimated amount of contracts remaining to be executed on capital account and not provided for:
+As at March 31, 2026, the Group had commitment of ` 226 Crore (March 31, 2025: ` 94 Crore), net of advances
+towards the procurement of property, plant and equipment.
+(b) Contingent liabilities
+(i) Legal claims against the Group that are not acknowledged as debts amounted to ` 0 Crore.( March 31, 2025
+: ` 0 Crore)
+(ii) In December 2023, the Company received Show Cause Notices (SCNs) from the GST authorities requiring
+the Company to explain why a tax liability of ` 327 Crore along with the applicable interest and penalties
+for the period from July 2020 to March 31, 2022, should not be levied and recovered. The alleged amount
+pertains to the delivery charges collected from the end user on behalf of the delivery partners. The Company
+has filed preliminary objections against the SCN and based on the external independent expert's advice,
+believes it has a strong case on merits. The Company has also filed a writ petition dated October 08, 2025
+before the Hon'ble Karnataka High Court and obtained a stay on the adjudication proceedings. The matter
+is being closely monitored, and the Company will address further proceedings as necessary.
+(iii) The Group is subject to taxation matters that arise from time to time in the ordinary course of business.
+Judgement is required in assessing the range of possible outcomes for some of these tax matters, which
+could change substantially over time as each of the matter progresses depending on experience on actual
+assessment proceedings by tax authorities and other judicial precedents. Based on its internal assessment
+supported by external legal counsel views, if any, the Group believes that it will be able to sustain its positions
+if challenged by the authorities and accordingly no additional provision is required for these matters.
+(iv) The Company has given corporate guarantee for the working capital facility availed by wholly owned
+subsidiary, Swiggy Networks Limited (formerly known as Swiggy Networks Private Limited, Scootsy Logistics
+Private Limited) amounting to ` 340 Crore (March 31, 2025: ` 64 Crore).
+(v) The Company has committed to support its subsidiaries and step-down subsidiaries in the event they are
+unable to meet their liabilities due to losses incurred by them.
+Details of weighted average remaining contractual life and exercise prices for the options outstanding at the
+reporting date:
+No. of options
+No. of equity
+shares arising
+out of options
+Exercise price
+(`)
+Remaining life
+(years)*
+March 31, 2026
+Swiggy ESOP 2015 (formerly known as Bundl ESOP 2015) 25,702 3,60,07,886 1,401 81
+Swiggy ESOP 2021 (formerly known as Bundl ESOP 2021) 10,048 1,40,77,014 1,401 81
+Swiggy ESOP 2024 9,64,15,898 9,64,15,898 1 84
+March 31, 2025
+Swiggy ESOP 2015 (formerly known as Bundl ESOP 2015) 52,154 7,30,67,754 1,401 82
+Swiggy ESOP 2021 (formerly known as Bundl ESOP 2021) 16,044 2,24,77,644 1,401 82
+Swiggy ESOP 2024 8,26,19,735 8,26,19,735 1 85
+*Weighted average remaining contractual life in years.
+The fair value of the awards are estimated using the Black-Scholes Model for time and non market performance
+based options and Monte Carlo simulation model is used for market performance based options. The following table
+list the inputs to the models used for Swiggy ESOP plans:
+Year ended March 31, 2026
+Swiggy ESOP 2024
+January 01, 2026
+to
+March 31, 2026
+October 01, 2025
+to
+December 31, 2025
+July 01, 2025
+to
+September 30, 2025
+April 01, 2025
+to
+June 30, 2025
+Risk free interest rate (% p.a) 5.42%-6.28% 5.48%-6.13% 5.43%-6.02% 5.71%-6.23%
+Expected life of options granted (years) 2-5 2-5 2-5 2-4
+Expected volatility (simple average) 35.22% -38.8% 35.57%-39.71% 36.43%-44.17% 32.15%-41.55%
+Dividend yield (%) - - - -
+Fair value of the option (`) 147 - 351 245 - 448 274 - 428 120 - 344
+Exercise price (`) 1 1 1 1
+Year ended March 31, 2025
+Swiggy ESOP 2024
+October 01, 2024
+to
+December 31, 2024
+July 01, 2024
+to
+September 30, 2024
+April 01, 2024
+to
+June 30, 2024
+Risk free interest rate (% p.a) 6.56 %- 6.62% 6.89%- 7.92% 6.68 % - 7.07 %
+Expected life of options granted (years) 4-7 2-7 2-7
+Expected volatility (simple average) 57.57% - 68.41% 53.98%- 63.28% 30% - 50%
+Dividend yield (%) - - -
+Fair value of the option (`) 320 320 193 - 320
+Exercise price (`) 1 1 1
+Corporate Overview
+Statutory Reports
+Financial Statements
+Corporate Overview
+Statutory Reports
+Financial Statements

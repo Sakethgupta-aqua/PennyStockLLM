@@ -1,0 +1,144 @@
+Notes to the Consolidated financial statements
+for the year ended 31st March, 2026
+Notes to the Consolidated financial statements
+for the year ended 31st March, 2026
+(b) Share appreciation rights
+The Nomination and Remuneration Committee has granted Stock Appreciation Rights ("STAR") to certain eligible employees pursuant to the Group's Employee Stock Appreciation Rights
+Plan, 2011 ("Plan"). The grant price is determined based on a formulae as defined in the Plan. There are schemes under each Plan with different vesting periods. Scheme I to VII have
+matured on their respective vesting dates. Under the Plan, the specified eligible employees are entitled to receive a Star Value which is the excess of the maturity price over the grant price
+subject to certain conditions. The Plan is administered by Nomination and Remuneration Committee comprising independent directors. H in crore
+Scheme Grant Date Grant Price
+(J)
+Vesting
+Date
+As at March 31 2026 As at March 31 2025
+Number of grants outstanding (Nos)
+Carrying amount
+of liability -
+included in
+employee benefit
+obligation
+(J in Crore)
+Number of grants outstanding (Nos)
+Carrying amount of
+liability - included
+in employee benefit
+obligation
+(J in Crore)
+at the
+beginning
+of the
+year
+Add :
+Granted
+during
+the year
+Less :
+Forfeited
+during
+the year
+Less :
+Exercised
+during
+the year
+at the
+end of the
+year
+Classified
+as long￾term
+Classified
+as short￾term
+at the
+beginning
+of the
+year
+Add :
+Granted
+during
+the year
+Less :
+Forfeited
+during
+the year
+Less :
+Exercised
+during
+the year
+at the
+end of the
+year
+Classified
+as long￾term
+Classified
+as short￾term
+STAR XII 07-Dec-21 545.34 30-Nov-24 - - - - - 4,94,202 - 47,144 4,47,058 -
+05-May-22 520.96 30-Nov-24 - - - - - 24,785 - 12,707 12,078 -
+07-Dec-22 498.25 30-Nov-25 - - - - - 26,059 - - 26,059 -
+STAR XIII 07-Dec-22 498.25 30-Nov-25 3,75,902 - 61,272 3,14,630 - 4,44,565 - 68,663 - 3,75,902 7
+05-May-23 483.50 30-Nov-25 9,487 - - 9,487 - 13,134 - 3,647 - 9,487
+08-Dec-23 527.68 30-Nov-25 1,32,386 - 29,664 1,02,722 - 1,32,386 - - - 1,32,386
+STAR XIV 08-Dec-23 527.68 30-Nov-26 6,62,552 - 1,29,363 - 5,33,189 10 7,44,523 - 81,971 - 6,62,552 6
+STAR XV 30-Apr-24 506.17 01-Dec-25 19,721 - - 19,721 - - 28,984 9,263 - 19,721
+30-Apr-24 506.17 01-Dec-26 32,318 - - - 32,318 - 47,086 14,768 - 32,318
+STAR XVI 13-Dec-24 619.56 30-Nov-26 92,525 - 18,196 - 74,329 - 92,525 - - 92,525
+13-Dec-24 619.56 30-Nov-27 7,90,461 - 1,33,653 - 6,56,808 6 - 8,01,036 10,575 - 7,90,461
+STAR XVII 25-Apr-25 673.94 30-Nov-27 - 50,511 11,273 - 39,238 - - - - -
+STAR XVIIII 05-Dec-25 727.4 30-Nov-27 - 56,037 - - 56,037 - - - - -
+05-Dec-25 727.4 30-Nov-28 - 5,29,063 - - 5,29,063 - - - - -
+Total 21,15,352 6,35,611 3,83,421 4,46,560 19,20,982 6 10 18,79,654 9,69,631 2,48,738 4,85,195 21,15,352 6 7
+The Group has formed "Welfare of Mariconians Trust" (The Trust) for the implementation of the schemes that are notified or may be notified from time to time by the Group under the
+Plan. The Group has advanced H 158 Crores as at 31st March, 2026 (H 71 Crore as at 31st March, 2025) to the Trust for purchase of the Company's shares under the Plan. As per the
+Trust Deed and Trust Rules, upon maturity, the Trust shall sell the Company's shares and hand over the proceeds to the Group. The Group, after adjusting the loan advanced and interest
+thereon (on loan advanced after1 April, 2013), shall utilize the proceeds towards meeting its STAR Value obligation.
+The fair value of the STAR's was determined using the Black-Scholes model using the following inputs at the grant date and as at
+each reporting date:
+H in crore
+Particulars 31st March, 2026 31st March, 2025
+Share price at measurement date (H per share) 735.95 651.65
+Expected volatility (%) 18.15%-22.13% 22.89%-25.16%
+Dividend yield (%) 1.79% 1.86%
+Risk-free interest rate (%) 5.77%-6.18% 6.34%-6.42%
+H in crore
+Particulars 31st March, 2026 31st March, 2025
+Employee stock option plan 31 35
+Stock appreciation rights 14 26
+Total employee share based payment expense 44 61
+(c) Expense arising from share-based payment transactions recognised in Profit or Loss as part of
+employee benefit expense were as follows:
+34 Contingent liabilities:
+H in crore
+Particulars As at
+31st March, 2026
+As at
+31st March, 2025
+Disputed tax demands / claims
+Sales tax / GST 109 96
+Income tax 324 336
+Claims against the Group not acknowledged as debts 18 16
+Corporate guarantees given to banks on behalf of Broadcast Audience Research
+Council (BARC)
+1 1
+Note:
+1. The Group has reviewed all its pending litigations and proceedings and has adequately provided for where provisions are
+required and disclosed as contingent liabilities where applicable, in its financial statements. The Group does not expect the
+outcome of these proceedings to have a materially adverse effect on its financial statements.
+2. The Group has ongoing disputes with income tax authorities in India. The disputes relate to tax treatment of certain expenses
+claimed as deductions, computation or eligibility of tax incentives and allowances. The Group have contingent liability of H 324
+crore and H 336 crore as at March 31, 2026 and 2025, respectively, in respect of tax demands, which are being contested by
+the Group based on the management evaluation and advice of tax consultants.
+3. The Group periodically receives notices and inquiries from tax authorities related to the Group's operations in the jurisdictions it
+operates in. The Group has assessed these notices and inquiries and estimated that any consequent tax claims or demands by the
+income tax authorities will not succeed on ultimate resolution.
+35 Commitments
+Capital commitments:
+H in crore
+Particulars As at
+31st March, 2026
+As at
+31st March, 2025
+Estimated amount of contracts remaining to be executed on capital account and not
+provided for (net of advances)
+5 17
+Total 5 17
+Marico Limited Integrated Annual Report 2025-26 Corporate Overview Statutory Reports Financial Statements
+446 447

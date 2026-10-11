@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:xbrldi="http://xbrl.org/2006/xbrldi" xmlns:in-capmkt="http://www.sebi.gov.in/xbrl/in-capmkt">
+<xbrli:context id="OneD"><xbrli:entity><xbrli:identifier scheme="http://www.sebi.gov.in/in-capmkt/ScripCode">540699</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:startDate>2025-07-01</xbrli:startDate><xbrli:endDate>2025-09-30</xbrli:endDate></xbrli:period></xbrli:context>
+<xbrli:context id="FourD"><xbrli:entity><xbrli:identifier scheme="http://www.sebi.gov.in/in-capmkt/ScripCode">540699</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:startDate>2025-04-01</xbrli:startDate><xbrli:endDate>2025-09-30</xbrli:endDate></xbrli:period></xbrli:context>
+<in-capmkt:RevenueFromOperations contextRef="OneD" decimals="-5" unitRef="INR">148550400000</in-capmkt:RevenueFromOperations>
+<in-capmkt:RevenueFromOperations contextRef="FourD" decimals="-5" unitRef="INR">276907000000</in-capmkt:RevenueFromOperations>
+</xbrli:xbrl>

@@ -1,0 +1,14 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:xbrldi="http://xbrl.org/2006/xbrldi" xmlns:in-bse-shp="http://www.bseindia.com/xbrl/shp">
+<xbrli:context id="MainI"><xbrli:entity><xbrli:identifier scheme="http://www.bseindia.com/in-bse-shp/ScripCode">540699</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:instant>2026-06-30</xbrli:instant></xbrli:period></xbrli:context>
+<xbrli:context id="ShareholdingOfPromoterAndPromoterGroup_ContextI"><xbrli:entity><xbrli:identifier scheme="http://www.bseindia.com/in-bse-shp/ScripCode">540699</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:instant>2026-06-30</xbrli:instant></xbrli:period><xbrli:scenario><xbrldi:explicitMember dimension="in-bse-shp:CategoryOfShareholdersAxis">in-bse-shp:ShareholdingOfPromoterAndPromoterGroupMember</xbrldi:explicitMember></xbrli:scenario></xbrli:context>
+<xbrli:context id="ShareholdingPattern_ContextI"><xbrli:entity><xbrli:identifier scheme="http://www.bseindia.com/in-bse-shp/ScripCode">540699</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:instant>2026-06-30</xbrli:instant></xbrli:period><xbrli:scenario><xbrldi:explicitMember dimension="in-bse-shp:CategoryOfShareholdersAxis">in-bse-shp:ShareholdingPatternMember</xbrldi:explicitMember></xbrli:scenario></xbrli:context>
+<in-bse-shp:WhetherAnySharesHeldByPromotersAreEncumberedUnderPledged contextRef="MainI">false</in-bse-shp:WhetherAnySharesHeldByPromotersAreEncumberedUnderPledged>
+<in-bse-shp:WhetherAnySharesHeldByPromotersAreEncumberedUnderPledgedForPromoterAndPromoterGroup contextRef="MainI">false</in-bse-shp:WhetherAnySharesHeldByPromotersAreEncumberedUnderPledgedForPromoterAndPromoterGroup>
+<in-bse-shp:WhetherAnySharesHeldByPromotersAreEncumberedUnderNonDisposalUndertaking contextRef="MainI">false</in-bse-shp:WhetherAnySharesHeldByPromotersAreEncumberedUnderNonDisposalUndertaking>
+<in-bse-shp:WhetherAnySharesHeldByPromotersAreEncumberedUnderNonDisposalUndertakingForPromoterAndPromoterGroup contextRef="MainI">false</in-bse-shp:WhetherAnySharesHeldByPromotersAreEncumberedUnderNonDisposalUndertakingForPromoterAndPromoterGroup>
+<in-bse-shp:WhetherAnySharesHeldByPromotersAreEncumberedOtherThanByWayOfPledgeOrNDU contextRef="MainI">false</in-bse-shp:WhetherAnySharesHeldByPromotersAreEncumberedOtherThanByWayOfPledgeOrNDU>
+<in-bse-shp:WhetherAnySharesHeldByPromotersAreEncumberedOtherThanByWayOfPledgeOrNDUForPromoterAndPromoterGroup contextRef="MainI">false</in-bse-shp:WhetherAnySharesHeldByPromotersAreEncumberedOtherThanByWayOfPledgeOrNDUForPromoterAndPromoterGroup>
+<in-bse-shp:NumberOfShares contextRef="ShareholdingOfPromoterAndPromoterGroup_ContextI" decimals="INF" unitRef="shares">17438673</in-bse-shp:NumberOfShares>
+<in-bse-shp:NumberOfShares contextRef="ShareholdingPattern_ContextI" decimals="INF" unitRef="shares">61085921</in-bse-shp:NumberOfShares>
+</xbrli:xbrl>

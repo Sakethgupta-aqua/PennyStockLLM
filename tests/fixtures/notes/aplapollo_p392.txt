@@ -1,0 +1,51 @@
+Annual Report 2025 - 26 389
+Financial Statements
+NOTES TO THE CONSOLIDATED FINANCIAL STATEMENTS
+for the year ended March 31, 2026
+35 EARNINGS PER SHARE (EPS)
+The following table reflects the profit and shares data used in the computation of basic and diluted earnings per share.
+(H in crores, unless otherwise stated)
+Particulars Year ended
+March 31, 2026
+Year ended
+March 31, 2025
+Profit for the year attributable to the owners of the Company used in
+calculating basic and diluted earnings per share (a)
+1,203.08 757.06
+Weighted average number of equity shares used as the denominator in
+calculating basic earnings per share (b)
+27,75,98,099 27,75,24,564
+Weighted average number of equity shares and potential equity shares
+used as the denominator in calculating diluted earnings per share (c)
+27,75,98,099 27,75,24,564
+Nominal value of equity shares 2 2
+(a) Basic earnings per share in H (a/b) 43.34 27.28
+(b) Diluted earnings per share in H (a/c) 43.34 27.28
+36 CONTINGENT LIABILITIES AND COMMITMENTS (TO THE EXTENT NOT PROVIDED FOR) (H in crores)
+Particulars Year ended
+March 31, 2026
+Year ended
+March 31, 2025
+(a) Contingent liabilities (for pending litigations)
+Claims against company not acknowledged as debts
+(1) Disputed claims/levies in respect of sales tax:
+- Reversal of input tax credit 0.61 0.89
+0.61 0.89
+(2) Disputed claims/levies in respect of excise duty:
+- Availability of input credit 10.28 10.28
+- Excise demand on excess / shortages 5.53 5.91
+15.81 16.19
+(3) Disputed claims/levies in respect of Income Tax:
+- On account of Employee stock option plan 3.96 3.96
+- On account of deduct Tax Deducted at Source 1.58 1.58
+- On account of various matters 1.73 -
+1.58 5.54
+(4) Disputed claims/levies in respect of Goods & service tax:
+- On account of adjustment in turnover reported in Form GSTR-9C 28.12 28.12
+- On account of reversal of input tax credit 3.15 3.15
+- On account of various matters 3.34 2.59
+34.61 33.86
+Total 58.30 56.48
+(5) The Group has reviewed all its pending litigations and proceedings and has adequately provided for where provisions
+are required and disclosed as contingent liabilities where applicable, in its consolidated financial statements. The Group
+does not expect the outcome of these proceedings to have a materially effect on its consolidated financial statements.

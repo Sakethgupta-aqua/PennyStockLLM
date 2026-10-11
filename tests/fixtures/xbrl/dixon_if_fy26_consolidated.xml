@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<xbrli:xbrl xmlns:xbrli="http://www.xbrl.org/2003/instance" xmlns:xbrldi="http://xbrl.org/2006/xbrldi" xmlns:in-capmkt="http://www.sebi.gov.in/xbrl/in-capmkt">
+<xbrli:context id="OneD"><xbrli:entity><xbrli:identifier scheme="http://www.sebi.gov.in/in-capmkt/ScripCode">540699</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:startDate>2026-01-01</xbrli:startDate><xbrli:endDate>2026-03-31</xbrli:endDate></xbrli:period></xbrli:context>
+<xbrli:context id="FourD"><xbrli:entity><xbrli:identifier scheme="http://www.sebi.gov.in/in-capmkt/ScripCode">540699</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:startDate>2025-04-01</xbrli:startDate><xbrli:endDate>2026-03-31</xbrli:endDate></xbrli:period></xbrli:context>
+<xbrli:context id="OneI"><xbrli:entity><xbrli:identifier scheme="http://www.sebi.gov.in/in-capmkt/ScripCode">540699</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:instant>2026-03-31</xbrli:instant></xbrli:period></xbrli:context>
+<xbrli:context id="D_Auditor1"><xbrli:entity><xbrli:identifier scheme="http://www.sebi.gov.in/in-capmkt/ScripCode">540699</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:startDate>2026-01-01</xbrli:startDate><xbrli:endDate>2026-03-31</xbrli:endDate></xbrli:period><xbrli:scenario><xbrldi:typedMember dimension="in-capmkt:AuditorAxis"><in-capmkt:AuditorDomain>AuditorDomain1</in-capmkt:AuditorDomain></xbrldi:typedMember></xbrli:scenario></xbrli:context>
+<in-capmkt:RevenueFromOperations contextRef="OneD" decimals="-5" unitRef="INR">105105100000</in-capmkt:RevenueFromOperations>
+<in-capmkt:ExceptionalItemsBeforeTax contextRef="OneD" decimals="-5" unitRef="INR">0</in-capmkt:ExceptionalItemsBeforeTax>
+<in-capmkt:ProfitOrLossAttributableToOwnersOfParent contextRef="OneD" decimals="-5" unitRef="INR">2564100000</in-capmkt:ProfitOrLossAttributableToOwnersOfParent>
+<in-capmkt:BasicEarningsLossPerShareFromContinuingOperations contextRef="OneD" decimals="INF" unitRef="INRPerShare">49.22</in-capmkt:BasicEarningsLossPerShareFromContinuingOperations>
+<in-capmkt:RevenueFromOperations contextRef="FourD" decimals="-5" unitRef="INR">488728000000</in-capmkt:RevenueFromOperations>
+<in-capmkt:ExceptionalItemsBeforeTax contextRef="FourD" decimals="-5" unitRef="INR">0</in-capmkt:ExceptionalItemsBeforeTax>
+<in-capmkt:ProfitOrLossAttributableToOwnersOfParent contextRef="FourD" decimals="-5" unitRef="INR">14386400000</in-capmkt:ProfitOrLossAttributableToOwnersOfParent>
+<in-capmkt:BasicEarningsLossPerShareFromContinuingOperations contextRef="FourD" decimals="INF" unitRef="INRPerShare">271.59</in-capmkt:BasicEarningsLossPerShareFromContinuingOperations>
+<in-capmkt:EquityAttributableToOwnersOfParent contextRef="OneI" decimals="-5" unitRef="INR">46766700000</in-capmkt:EquityAttributableToOwnersOfParent>
+<in-capmkt:Equity contextRef="OneI" decimals="-5" unitRef="INR">53866700000</in-capmkt:Equity>
+<in-capmkt:AuditorsFirmName contextRef="D_Auditor1">S.N. DHAWAN &amp; CO LLP</in-capmkt:AuditorsFirmName>
+<xbrli:context id="SegmentMobilesFourD"><xbrli:entity><xbrli:identifier scheme="x">540699</xbrli:identifier></xbrli:entity><xbrli:period><xbrli:startDate>2025-04-01</xbrli:startDate><xbrli:endDate>2026-03-31</xbrli:endDate></xbrli:period><xbrli:scenario><xbrldi:explicitMember dimension="in-capmkt:SegmentsAxis">in-capmkt:MobilesMember</xbrldi:explicitMember></xbrli:scenario></xbrli:context>
+<!-- synthetic: a segment row reusing the concept name - breakdowns must be ignored -->
+<in-capmkt:RevenueFromOperations contextRef="SegmentMobilesFourD" decimals="-5" unitRef="INR">350000000000</in-capmkt:RevenueFromOperations>
+</xbrli:xbrl>

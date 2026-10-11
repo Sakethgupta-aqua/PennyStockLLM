@@ -1,0 +1,134 @@
+[
+ {
+  "label": "Claims against company not acknowledged as debts",
+  "category": "disputed_tax",
+  "current": null,
+  "previous": null
+ },
+ {
+  "label": "(1) Disputed claims/levies in respect of sales tax:",
+  "category": "disputed_tax",
+  "current": null,
+  "previous": null
+ },
+ {
+  "label": "- Reversal of input tax credit",
+  "category": "disputed_tax",
+  "current": "0.61",
+  "previous": "0.89"
+ },
+ {
+  "label": "",
+  "category": "disputed_tax",
+  "current": "0.61",
+  "previous": "0.89"
+ },
+ {
+  "label": "(2) Disputed claims/levies in respect of excise duty:",
+  "category": "disputed_tax",
+  "current": null,
+  "previous": null
+ },
+ {
+  "label": "- Availability of input credit",
+  "category": "disputed_tax",
+  "current": "10.28",
+  "previous": "10.28"
+ },
+ {
+  "label": "- Excise demand on excess / shortages",
+  "category": "disputed_tax",
+  "current": "5.53",
+  "previous": "5.91"
+ },
+ {
+  "label": "",
+  "category": "disputed_tax",
+  "current": "15.81",
+  "previous": "16.19"
+ },
+ {
+  "label": "(3) Disputed claims/levies in respect of Income Tax:",
+  "category": "disputed_tax",
+  "current": null,
+  "previous": null
+ },
+ {
+  "label": "- On account of Employee stock option plan",
+  "category": "disputed_tax",
+  "current": "3.96",
+  "previous": "3.96"
+ },
+ {
+  "label": "- On account of deduct Tax Deducted at Source",
+  "category": "disputed_tax",
+  "current": "1.58",
+  "previous": "1.58"
+ },
+ {
+  "label": "- On account of various matters",
+  "category": "disputed_tax",
+  "current": "1.73",
+  "previous": null
+ },
+ {
+  "label": "",
+  "category": "disputed_tax",
+  "current": "1.58",
+  "previous": "5.54"
+ },
+ {
+  "label": "(4) Disputed claims/levies in respect of Goods & service tax:",
+  "category": "disputed_tax",
+  "current": null,
+  "previous": null
+ },
+ {
+  "label": "- On account of adjustment in turnover reported in Form GSTR-9C",
+  "category": "disputed_tax",
+  "current": "28.12",
+  "previous": "28.12"
+ },
+ {
+  "label": "- On account of reversal of input tax credit",
+  "category": "disputed_tax",
+  "current": "3.15",
+  "previous": "3.15"
+ },
+ {
+  "label": "- On account of various matters",
+  "category": "disputed_tax",
+  "current": "3.34",
+  "previous": "2.59"
+ },
+ {
+  "label": "",
+  "category": "disputed_tax",
+  "current": "34.61",
+  "previous": "33.86"
+ },
+ {
+  "label": "Total",
+  "category": "subtotal",
+  "current": "58.30",
+  "previous": "56.48"
+ },
+ {
+  "label": "(i) Estimated amount of contracts remaining to be executed on capital account and not provided for",
+  "category": "commitment",
+  "current": "852.64",
+  "previous": "293.64"
+ },
+ {
+  "label": "(ii) Outstanding export commitement in respect of capital goods imported under the export promotion capital goods scheme to utilise the benefit of a zero or concessional custom duty rate. These benefits are subject to future exports within stipulated time.",
+  "category": "commitment",
+  "current": "497.04",
+  "previous": "621.60"
+ },
+ {
+  "label": "(iii) Corporate guarantees issued by the Holding Company in favour of lenders on behalf of its subsidiary (APL Apollo Tubes Company LLC) for loans and credit facilities availed from banks.",
+  "category": "guarantee_for_others",
+  "current": "792.68",
+  "previous": "926.46"
+ }
+]
