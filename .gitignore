@@ -27,9 +27,13 @@ Index_Page_PennyStock_Book/
 # --- broker research PDFs: third-party copyright, licensed to you for reading only ---
 # Never commit or redistribute these.
 Broker_Reports/
+# Trendlyne Stock Reports and exchange filings: same rule - local only, never committed
+Stock_Reports/
+Corporate_Filings/
 
 # --- generated data: rebuild with the scripts/ commands, don't version ---
 market.db
+filings.db*
 penny_stock_vector_db/
 traces/
 eval/results/
@@ -43,3 +47,7 @@ refresh.log
 # --- editor / personal settings ---
 StockLLM.code-workspace
 .claude/settings.local.json
+
+# Trendlyne session cookie for scripts/fetch_midcap_reports.py - grants account access
+cookies.txt
+*.cookies.txt

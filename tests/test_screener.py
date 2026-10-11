@@ -201,3 +201,62 @@ def test_negative_cash_flow_at_a_non_financial_is_flagged_as_ambiguous():
     that from real trouble, so the gate fires - but the ambiguity has to be stated."""
     notes = " ".join(screening_caveats(stock("CONGLOM", cash_conversion=-2.76)))
     assert "finance or lending subsidiary" in notes
+
+
+# --- Layer 1: broker KPIs earn a place in a lender's score only with enough coverage ---------
+def _banks(n, prefix="BANK"):
+    return [bank(f"{prefix}{i}") for i in range(n)]
+
+
+def test_broker_kpis_change_nothing_until_enough_lenders_carry_them():
+    """With five covered lenders a GNPA percentile is drawn from five names - noise with a decimal
+    point. Below the coverage gate the score must be exactly what it was without broker data."""
+    rows = _banks(25)
+    kpis = {f"BANK{i}": {"gnpa_pct": 1.0 + i} for i in range(5)}
+    with_kpis = {r.metrics.symbol: (r.score, r.pillars, r.completeness) for r in score_universe(rows, kpis)}
+    without = {r.metrics.symbol: (r.score, r.pillars, r.completeness) for r in score_universe(rows)}
+    assert with_kpis == without
+
+
+def test_once_coverage_is_reached_asset_quality_moves_a_lenders_safety_score():
+    """All 186 lenders sat at exactly 0.50 on safety: every safety input is skipped for a bank.
+    GNPA is what a lender's safety is actually judged on."""
+    rows = _banks(21) + [bank("NOKPI")]
+    kpis = {f"BANK{i}": {"gnpa_pct": 0.5 + i * 0.5} for i in range(21)}     # BANK0 cleanest book
+    res = {r.metrics.symbol: r for r in score_universe(rows, kpis)}
+    assert res["BANK0"].pillars["safety"] == 1.0
+    assert res["BANK20"].pillars["safety"] == 0.0
+    assert res["NOKPI"].pillars["safety"] == 0.5          # uncovered: neutral, never punished
+
+
+def test_a_lender_without_broker_coverage_loses_no_completeness():
+    """Broker coverage is a bonus source. A missing broker KPI is not a data gap, so it must not
+    push an uncovered bank under the completeness cut-off."""
+    rows = _banks(21) + [bank("NOKPI")]
+    kpis = {f"BANK{i}": {"gnpa_pct": 0.5 + i * 0.5} for i in range(21)}
+    covered = {r.metrics.symbol: r.completeness for r in score_universe(rows, kpis)}
+    plain = {r.metrics.symbol: r.completeness for r in score_universe(rows)}
+    assert covered["NOKPI"] == plain["NOKPI"]
+
+
+def test_a_bank_kpi_never_ranks_a_non_lender():
+    rows = [stock(f"IND{i}") for i in range(25)]
+    kpis = {f"IND{i}": {"gnpa_pct": float(i)} for i in range(25)}
+    assert {r.metrics.symbol: r.pillars for r in score_universe(rows, kpis)} == \
+        {r.metrics.symbol: r.pillars for r in score_universe(rows)}
+
+
+def test_the_screen_hands_kpis_to_the_scorer():
+    rows = _banks(21)
+    kpis = {f"BANK{i}": {"gnpa_pct": 0.5 + i * 0.5} for i in range(21)}
+    best = next(r for r in screen(rows, kpis=kpis).results if r.metrics.symbol == "BANK0")
+    assert best.pillars["safety"] == 1.0
+
+
+# --- severe corporate events (event signals) are a veto like any other ---------------------------
+def test_an_event_veto_removes_a_stock_even_a_lender():
+    # ranking needs company: a lone survivor has no peers to be ranked against
+    rows = [stock(f"OK{i}") for i in range(4)] + [stock("BANKX", sector="Financial Services")]
+    f = screen(rows, 0, 0, events={"BANKX": [("severe corporate event", "auditor_exit 2026-09-01")]})
+    assert f.veto_reasons == {"severe corporate event": 1} and f.after_vetoes == 4
+    assert "BANKX" not in [r.metrics.symbol for r in f.results]

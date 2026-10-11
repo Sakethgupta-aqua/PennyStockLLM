@@ -28,9 +28,11 @@ import sqlite3
 from abc import ABC, abstractmethod
 from datetime import datetime, timedelta
 from functools import lru_cache
+from urllib.parse import quote
 
 from pennystock.config import settings
 from pennystock.data.ownership import Ownership, Quarter
+from pennystock.data.xbrl import facts, number
 
 logger = logging.getLogger(__name__)
 
@@ -155,47 +157,55 @@ class OwnershipStore:
         self.db_path = str(db_path or settings.market_db)
         with sqlite3.connect(self.db_path) as con:
             con.executescript(_SCHEMA)
-            try:                                   # migrate DBs created before this column existed
-                con.execute("ALTER TABLE shareholding ADD COLUMN pledge_pct_of_total REAL")
-            except sqlite3.OperationalError:
-                pass
+            for column in ("pledge_pct_of_total REAL", "encumbrance_note TEXT"):   # migrate older DBs
+                try:
+                    con.execute(f"ALTER TABLE shareholding ADD COLUMN {column}")
+                except sqlite3.OperationalError:
+                    pass
 
     def load(self, symbol: str) -> Ownership:
         with sqlite3.connect(self.db_path) as con:
             rows = con.execute(
                 "SELECT quarter, promoter_pct, fii_pct, dii_pct, public_pct, government_pct,"
-                " shareholders, pledge_pct, pledge_source, fetched_at, pledge_pct_of_total FROM shareholding"
+                " shareholders, pledge_pct, pledge_source, fetched_at, pledge_pct_of_total, encumbrance_note"
+                " FROM shareholding"
                 " WHERE symbol=? ORDER BY quarter_ord", (symbol.upper(),)).fetchall()
         own = Ownership(symbol=symbol.upper())
         for r in rows:
             own.quarters.append(Quarter(quarter=r[0], promoter_pct=r[1], fii_pct=r[2], dii_pct=r[3],
                                         public_pct=r[4], government_pct=r[5], shareholders=r[6],
                                         pledge_pct=r[7], pledge_source=r[8],
-                                        pledge_pct_of_total=r[10]))
+                                        pledge_pct_of_total=r[10], encumbrance_note=r[11]))
             own.fetched_at = r[9]
         return own
 
     def save(self, own: Ownership) -> int:
-        """Upsert quarters. A refetch NEVER clobbers a manually entered pledge."""
+        """Upsert quarters. A refetch NEVER clobbers a manually entered pledge (source 'manual')."""
         now = datetime.now().isoformat(timespec="seconds")
         with sqlite3.connect(self.db_path) as con:
             for q in own.quarters:
                 con.execute(
                     "INSERT INTO shareholding (symbol, quarter, quarter_ord, promoter_pct, fii_pct,"
                     " dii_pct, public_pct, government_pct, shareholders, pledge_pct, pledge_source,"
-                    " fetched_at, pledge_pct_of_total) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)"
+                    " fetched_at, pledge_pct_of_total, encumbrance_note) VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)"
                     " ON CONFLICT(symbol, quarter) DO UPDATE SET"
                     "   promoter_pct=excluded.promoter_pct, fii_pct=excluded.fii_pct,"
                     "   dii_pct=excluded.dii_pct, public_pct=excluded.public_pct,"
                     "   government_pct=excluded.government_pct, shareholders=excluded.shareholders,"
-                    "   pledge_pct=COALESCE(excluded.pledge_pct, shareholding.pledge_pct),"
-                    "   pledge_source=COALESCE(excluded.pledge_source, shareholding.pledge_source),"
-                    "   pledge_pct_of_total=COALESCE(excluded.pledge_pct_of_total,"
-                    "                               shareholding.pledge_pct_of_total),"
+                    "   pledge_pct=CASE WHEN shareholding.pledge_source = 'manual'"
+                    "       THEN shareholding.pledge_pct"
+                    "       ELSE COALESCE(excluded.pledge_pct, shareholding.pledge_pct) END,"
+                    "   pledge_source=CASE WHEN shareholding.pledge_source = 'manual' THEN 'manual'"
+                    "       ELSE COALESCE(excluded.pledge_source, shareholding.pledge_source) END,"
+                    "   pledge_pct_of_total=CASE WHEN shareholding.pledge_source = 'manual'"
+                    "       THEN shareholding.pledge_pct_of_total"
+                    "       ELSE COALESCE(excluded.pledge_pct_of_total,"
+                    "                     shareholding.pledge_pct_of_total) END,"
+                    "   encumbrance_note=COALESCE(excluded.encumbrance_note, shareholding.encumbrance_note),"
                     "   fetched_at=excluded.fetched_at",
                     (own.symbol.upper(), q.quarter, quarter_ord(q.quarter), q.promoter_pct, q.fii_pct,
                      q.dii_pct, q.public_pct, q.government_pct, q.shareholders, q.pledge_pct,
-                     q.pledge_source, now, q.pledge_pct_of_total))
+                     q.pledge_source, now, q.pledge_pct_of_total, q.encumbrance_note))
         return len(own.quarters)
 
     def set_pledge(self, symbol: str, quarter: str, pct: float, source: str = "manual") -> None:
@@ -226,17 +236,61 @@ def norm_quarter(raw: str) -> str:
     return f"{m.group(2).title()} {m.group(3)}" if m else str(raw).strip()
 
 
+_PROMOTER_CTX = "ShareholdingOfPromoterAndPromoterGroup_ContextI"
+_TOTAL_CTX = "ShareholdingPattern_ContextI"
+_ENCUMBERED = "WhetherAnySharesHeldByPromotersAreEncumbered"
+
+
+def parse_shp_pledge(xml: str) -> dict | None:
+    """Promoter pledge from one quarter's statutory shareholding pattern (SEBI LODR Reg 31, XBRL).
+
+    NSE's corporate-pledgedata API returned no rows for ANY company on 2026-10-11 (including ones with 39
+    pledge filings on record), while every quarter's SHP XBRL carries yes/no encumbrance flags and the pledged
+    share count.
+    Pledge is a % of the promoters' OWN holding (the market convention) and, beside it, of all shares."""
+    fs = facts(xml)
+
+    def at(name: str, ctx: str):
+        return next((f for f in fs if f.name == name and f.context.id == ctx), None)
+
+    def flag(suffix: str) -> bool | None:
+        f = next((f for f in fs if f.name == _ENCUMBERED + suffix), None)
+        return None if f is None else f.value.strip().lower() == "true"
+
+    promoter, total = number(at("NumberOfShares", _PROMOTER_CTX)), number(at("NumberOfShares", _TOTAL_CTX))
+    pledged = flag("UnderPledged")
+    if promoter is None and total and pledged is not True:
+        # no promoter group (YESBANK, FEDERALBNK, PAYTM, SWIGGY ...): the filing has no promoter holding, so
+        # there is no promoter pledge; the provider takes this only when NSE lists 0% promoter as well
+        return {"promoter_shares": 0.0, "total_shares": total, "pledged_shares": 0.0, "pledge_pct": 0.0,
+                "pledge_pct_of_total": 0.0, "encumbrance_note": None, "no_promoter_group": True}
+    if promoter is None or pledged is None:
+        return None
+    count = number(at("NumberOfSharesEncumberedUnderPledged", _PROMOTER_CTX))
+    if count is None:
+        if pledged:                                    # says pledged, gives no count: unreadable, never zero
+            return None
+        count = 0.0
+    other = [name for name, on in (("a non-disposal undertaking", flag("UnderNonDisposalUndertaking")),
+                                   ("another encumbrance", flag("OtherThanByWayOfPledgeOrNDU"))) if on]
+    return {"promoter_shares": promoter, "total_shares": total, "pledged_shares": count,
+            "pledge_pct": round(count / promoter * 100, 2) if promoter else 0.0,
+            "pledge_pct_of_total": round(count / total * 100, 2) if total else None,
+            "encumbrance_note": ("promoter shares are also encumbered by " + " and ".join(other))
+            if other else None, "no_promoter_group": False}
+
+
 class NseOwnershipProvider(OwnershipProvider):
     """NSE's own corporate-filings APIs - the authoritative statutory source, and free.
 
-    Two endpoints:
-      corporate-pledgedata            -> latest quarter's pledge (shares pledged + promoter holding)
-      corporate-share-holdings-master -> 20-25 quarters of promoter vs public %
+    corporate-share-holdings-master -> 20-25 quarters of promoter vs public %, each with its statutory XBRL;
+    the pledge is read from that XBRL (parse_shp_pledge). The corporate-pledgedata API returned no rows for
+    any company on 2026-10-11, so it is no longer called.
 
     IMPORTANT unit trap: NSE's headline `percSharesPledged` is a % of TOTAL shares, but the market
     convention for "promoter pledging" is % of the PROMOTER'S OWN holding. Suzlon reports 6.84% of
     total, which is 58.5% of the promoter stake - the difference between "low" and "SEVERE". We
-    therefore compute numSharesPledged / totPromoterHolding ourselves and keep NSE's figure beside it.
+    therefore compute pledged shares / promoter shares ourselves and keep the % of all shares beside it.
 
     NSE returns 403 to any client without a full browser header set AND a Referer pointing at the
     symbol's quote page, so we prime a session per symbol before calling the API.
@@ -252,11 +306,14 @@ class NseOwnershipProvider(OwnershipProvider):
         "Sec-Fetch-Dest": "empty", "Sec-Fetch-Mode": "cors", "Sec-Fetch-Site": "same-origin",
     }
 
+    def __init__(self, store: "OwnershipStore | None" = None):
+        self.store = store                       # quarters already read from their XBRL are not re-fetched
+
     def _session(self, symbol: str):
         import requests
         s = requests.Session()
         s.headers.update(self.HEADERS)
-        ref = f"{self.BASE}/get-quotes/equity?symbol={symbol}"
+        ref = f"{self.BASE}/get-quotes/equity?symbol={quote(symbol, safe='')}"
         s.headers["Referer"] = ref
         s.get(ref, timeout=settings.ownership_timeout_s)          # sets the cookies NSE requires
         return s
@@ -267,38 +324,41 @@ class NseOwnershipProvider(OwnershipProvider):
         by_quarter: dict[str, Quarter] = {}
         try:
             s = self._session(symbol)
-
-            # --- pledge (latest quarter only; history accumulates in our cache over time) ---
-            try:
-                rows = s.get(f"{self.BASE}/api/corporate-pledgedata?index=equities&symbol={symbol}",
-                             timeout=settings.ownership_timeout_s).json().get("data", []) or []
-                for r in rows:
-                    q = norm_quarter(r.get("shp"))
-                    pledged = _num(r.get("numSharesPledged"))
-                    promoter_shares = _num(r.get("totPromoterHolding"))
-                    quarter = by_quarter.setdefault(q, Quarter(quarter=q))
-                    if pledged is not None and promoter_shares:
-                        quarter.pledge_pct = round(pledged / promoter_shares * 100, 2)
-                        quarter.pledge_source = "nse"
-                    quarter.pledge_pct_of_total = _num(r.get("percSharesPledged"))
-                    quarter.promoter_pct = quarter.promoter_pct or _num(r.get("percPromoterHolding"))
-            except Exception as e:
-                logger.warning(f"NSE pledge fetch failed for {symbol}: {type(e).__name__}: {e}")
-
-            # --- promoter / public history ---
-            try:
-                for r in s.get(f"{self.BASE}/api/corporate-share-holdings-master"
-                               f"?index=equities&symbol={symbol}",
-                               timeout=settings.ownership_timeout_s).json() or []:
-                    q = norm_quarter(r.get("date"))
-                    quarter = by_quarter.setdefault(q, Quarter(quarter=q))
-                    if quarter.promoter_pct is None:
-                        quarter.promoter_pct = _num(r.get("pr_and_prgrp"))
-                    if quarter.public_pct is None:
-                        quarter.public_pct = _num(r.get("public_val"))
+            filings: list[dict] = []
+            try:                                        # --- promoter / public history, 20-25 quarters ---
+                # encoded: 'symbol=M&MFIN' reads as symbol=M plus a stray parameter
+                url = (f"{self.BASE}/api/corporate-share-holdings-master?index=equities"
+                       f"&symbol={quote(symbol, safe='')}")
+                filings = s.get(url, timeout=settings.ownership_timeout_s).json() or []
+                for r in filings:
+                    label = norm_quarter(r.get("date"))
+                    q = by_quarter.setdefault(label, Quarter(quarter=label))
+                    q.promoter_pct, q.public_pct = _num(r.get("pr_and_prgrp")), _num(r.get("public_val"))
             except Exception as e:
                 logger.warning(f"NSE shareholding fetch failed for {symbol}: {type(e).__name__}: {e}")
 
+            # --- pledge, from each recent quarter's statutory XBRL, read once per quarter ---
+            done = {q.quarter for q in (self.store or _store()).load(symbol).quarters
+                    if q.pledge_source == "nse_shp_xbrl"}
+            recent = sorted((r for r in filings if r.get("xbrl")),
+                            key=lambda r: quarter_ord(norm_quarter(r.get("date"))), reverse=True)
+            for r in recent[: settings.ownership_lookback_quarters + 1]:
+                quarter = norm_quarter(r.get("date"))
+                if quarter in done:
+                    continue
+                try:
+                    pledge = parse_shp_pledge(s.get(r["xbrl"], timeout=settings.ownership_timeout_s).text)
+                except Exception as e:
+                    logger.warning(f"SHP XBRL unreadable for {symbol} {quarter}: {type(e).__name__}: {e}")
+                    continue
+                if pledge is not None and pledge["no_promoter_group"] and by_quarter[quarter].promoter_pct:
+                    logger.warning(f"SHP XBRL for {symbol} {quarter} shows no promoter holding but NSE lists "
+                                   f"{by_quarter[quarter].promoter_pct}% - pledge left unknown")
+                    continue
+                if pledge is not None:
+                    q = by_quarter[quarter]
+                    q.pledge_pct, q.pledge_pct_of_total = pledge["pledge_pct"], pledge["pledge_pct_of_total"]
+                    q.pledge_source, q.encumbrance_note = "nse_shp_xbrl", pledge["encumbrance_note"]
             own.quarters = sorted(by_quarter.values(), key=lambda q: quarter_ord(q.quarter))
             logger.info(f"NSE: {symbol} -> {len(own.quarters)} quarter(s)")
         except Exception as e:
@@ -307,7 +367,7 @@ class NseOwnershipProvider(OwnershipProvider):
 
 
 _MERGE_FIELDS = ("promoter_pct", "fii_pct", "dii_pct", "public_pct", "government_pct",
-                 "shareholders", "pledge_pct", "pledge_pct_of_total", "pledge_source")
+                 "shareholders", "pledge_pct", "pledge_pct_of_total", "pledge_source", "encumbrance_note")
 
 
 class CompositeOwnershipProvider(OwnershipProvider):

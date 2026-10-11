@@ -44,6 +44,9 @@ class SectorProfile:
     weights: dict[str, float] = field(default_factory=dict)
     blind_spots: tuple[str, ...] = ()
     note: str = ""
+    # Sector KPIs read from broker reports that may join a pillar - (metric, higher_is_better).
+    # They only ever vote once enough companies in the sector carry them; see screener.py.
+    kpi_pillars: dict[str, tuple[tuple[str, bool], ...]] = field(default_factory=dict)
 
 
 # Metrics that are meaningless for lenders. Deposits are not Debt/EBITDA-style debt, interest is a
@@ -69,6 +72,11 @@ PROFILES: tuple[SectorProfile, ...] = (
                      "capital adequacy (CRAR)", "CASA ratio", "credit cost", "cost-to-income"),
         note="Judge a lender on asset quality and capital, not on leverage ratios built for "
              "manufacturers. None of those inputs is in this screen.",
+        # every manufacturer safety ratio is skipped for a lender, which left 20% of its score a
+        # constant 0.50; asset quality and capital are what a lender's safety actually means
+        kpi_pillars={"safety": (("gnpa_pct", False), ("nnpa_pct", False), ("car_pct", True),
+                                ("pcr_pct", True), ("credit_cost_pct", False)),
+                     "quality": (("nim_pct", True), ("roa_pct", True), ("cost_to_income_pct", False))},
     ),
     SectorProfile(
         name="utilities_power",
@@ -186,6 +194,41 @@ DEFAULT_PROFILE = SectorProfile(
     note="No sector rulebook matched, so the general one was applied. Check what this kind of "
          "business is actually judged on before trusting the rank.",
 )
+
+
+# Which broker-report KPIs (broker_reports.KPI_ROWS) fill which declared blind spot. Keyed by the
+# blind spot's exact text; tests/test_sectors.py fails if a rulebook's wording drifts from it.
+BLIND_SPOT_KPIS: dict[str, tuple[str, ...]] = {
+    "net interest margin (NIM)": ("nim_pct",),
+    "GNPA/NNPA and slippage": ("gnpa_pct", "nnpa_pct"),
+    "provision coverage": ("pcr_pct", "pcr_incl_writeoff_pct"),
+    "capital adequacy (CRAR)": ("car_pct", "tier1_pct"),
+    "CASA ratio": ("casa_pct",),
+    "credit cost": ("credit_cost_pct",),
+    "cost-to-income": ("cost_to_income_pct",),
+    "plant load factor (PLF)": ("plf_pct",),
+    "pre-sales / bookings": ("presales_cr",),
+    "EBITDA per tonne": ("ebitda_per_tonne",),
+    "capacity utilisation": ("capacity_util_pct",),
+    "realisation per tonne": ("realisation_per_tonne",),
+    "deal TCV and book-to-bill": ("book_to_bill",),
+    "attrition (a two-year high of ~13.8% at TCS)": ("attrition_pct",),
+    "volume growth versus value growth": ("volume_growth_pct",),
+    "volume growth and realisation/ASP": ("volume_growth_pct",),
+    "same-store sales growth (SSSG)": ("sssg_pct",),
+    "order book and book-to-bill ratio": ("order_book_cr", "book_to_bill"),
+    "order inflow versus execution": ("order_inflow_cr",),
+    "gross refining margin (GRM)": ("grm_usd_bbl",),
+    "ARPU and subscriber additions": ("arpu",),
+}
+
+
+def blind_spot_coverage(profile: SectorProfile, available: set[str] | frozenset[str]
+                        ) -> tuple[list[str], list[str]]:
+    """(blind spots broker data now covers, blind spots still unmeasured), in rulebook order.
+    A blind spot is covered only when at least one of its KPIs actually has data."""
+    covered = [b for b in profile.blind_spots if set(BLIND_SPOT_KPIS.get(b, ())) & set(available)]
+    return covered, [b for b in profile.blind_spots if b not in covered]
 
 
 def profile_for(sector: str | None, industry: str | None) -> SectorProfile:

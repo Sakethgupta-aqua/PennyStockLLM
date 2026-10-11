@@ -36,7 +36,8 @@ class Quarter:
     shareholders: int | None = None
     pledge_pct: float | None = None                # % of PROMOTER holding - the industry convention
     pledge_pct_of_total: float | None = None       # % of TOTAL shares - what NSE reports as headline
-    pledge_source: str | None = None               # "nse" | "manual" | ... provenance matters
+    pledge_source: str | None = None               # "nse_shp_xbrl" | "manual" | ... provenance matters
+    encumbrance_note: str | None = None            # promoter shares encumbered other than by pledge
 
 
 @dataclass
@@ -81,22 +82,37 @@ def summarize_ownership(own: Ownership, lookback: int = 4) -> dict:
     inst_chg = _change([inst(q) for q in window])
     pledge_chg = _change([q.pledge_pct for q in window])
 
+    # the pledge comes from the newest quarter that has a reading: a secondary source can list a quarter
+    # before NSE serves its statutory filing (EXIDEIND Sep 2026), and that quarter is said to be unread
+    pq = latest if latest.pledge_pct is not None else next(
+        (q for q in reversed(window) if q.pledge_pct is not None), None)
     flags: list[str] = []
-    if latest.pledge_pct is None:
-        flags.append("PLEDGE UNKNOWN - promoter pledge is not available from the configured free "
-                     "sources. Do NOT assume it is zero; state that it is unverified.")
+    if pq is None:
+        flags.append("PLEDGE UNKNOWN - the statutory shareholding filing could not be read for this quarter. "
+                     "Do NOT assume it is zero; state that it is unverified.")
     else:
-        if latest.pledge_pct > 50:
-            flags.append(f"SEVERE: {latest.pledge_pct}% of PROMOTER HOLDING is pledged - "
+        if pq is not latest:
+            flags.append(f"PLEDGE AS OF {pq.quarter} - the {latest.quarter} shareholding filing has not been "
+                         "read yet; the pledge below is the latest statutory reading.")
+        if pq.pledge_pct == 0 and pq.pledge_source == "nse_shp_xbrl" and pq.promoter_pct == 0:
+            flags.append(f"NO PROMOTER GROUP - the statutory shareholding filing for {pq.quarter} shows no "
+                         "promoter holding, so there is no promoter pledge.")
+        elif pq.pledge_pct == 0 and pq.pledge_source == "nse_shp_xbrl":
+            flags.append(f"NO PROMOTER PLEDGE - the statutory shareholding filing for {pq.quarter} "
+                         "reports no promoter shares pledged.")
+        if pq.pledge_pct > 50:
+            flags.append(f"SEVERE: {pq.pledge_pct}% of PROMOTER HOLDING is pledged - "
                          "forced-selling / margin-call risk if the price falls.")
-        elif latest.pledge_pct > 30:
-            flags.append(f"HIGH RISK: {latest.pledge_pct}% of promoter holding is pledged.")
-        elif latest.pledge_pct > 10:
-            flags.append(f"CAUTION: {latest.pledge_pct}% of promoter holding is pledged.")
+        elif pq.pledge_pct > 30:
+            flags.append(f"HIGH RISK: {pq.pledge_pct}% of promoter holding is pledged.")
+        elif pq.pledge_pct > 10:
+            flags.append(f"CAUTION: {pq.pledge_pct}% of promoter holding is pledged.")
         if pledge_chg is not None and pledge_chg > 0:
             flags.append(f"Pledge RISING (+{pledge_chg}pp over {span} quarter(s)) - "
                          "an increasing trend is a red flag at any absolute level.")
 
+    if latest.encumbrance_note:
+        flags.append(f"ENCUMBRANCE: {latest.encumbrance_note} ({latest.quarter} filing).")
     if promoter_chg is not None and promoter_chg <= -PROMOTER_DROP_PP:
         flags.append(f"Promoter stake FALLING ({promoter_chg}pp over {span} quarter(s)) - "
                      "promoters reducing skin in the game.")
@@ -118,10 +134,12 @@ def summarize_ownership(own: Ownership, lookback: int = 4) -> dict:
         f"institutional_change_{span}q_pp": inst_chg,
         "public_pct": latest.public_pct,
         "shareholders": latest.shareholders,
-        "pledge_pct_of_promoter_holding": latest.pledge_pct,
-        "pledge_pct_of_total_shares": latest.pledge_pct_of_total,
-        "pledge_band": pledge_band(latest.pledge_pct),
-        "pledge_source": latest.pledge_source,
+        "pledge_pct_of_promoter_holding": pq.pledge_pct if pq else None,
+        "pledge_pct_of_total_shares": pq.pledge_pct_of_total if pq else None,
+        "pledge_band": pledge_band(pq.pledge_pct if pq else None),
+        "pledge_source": pq.pledge_source if pq else latest.pledge_source,
+        "pledge_quarter": pq.quarter if pq else None,
+        "encumbrance_note": (pq or latest).encumbrance_note,
         "risk_flags": flags or ["No ownership red flags detected in the available data."],
         "history": [{"q": q.quarter, "promoter": q.promoter_pct, "pledge": q.pledge_pct}
                     for q in qs[-8:]],

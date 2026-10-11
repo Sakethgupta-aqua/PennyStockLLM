@@ -20,17 +20,21 @@ from pennystock.config import settings
 _STOCK_TOOLS = {"get_indian_stock_data", "get_stock_fundamentals", "get_price_history",
                 "get_financials", "get_corporate_actions", "get_shareholding",
                 "get_forensics", "get_valuation_context", "get_corporate_events",
-                "get_management_commentary", "get_annual_report_notes"}
+                "get_management_commentary", "get_annual_report_notes",
+                "get_broker_consensus", "search_broker_research", "get_trendlyne_view",
+                "search_filings"}
 # screen_stocks is universe-level, so it is known but NOT symbol-scoped
 _KNOWN_TOOLS = _STOCK_TOOLS | {"penny_stock_researcher", "screen_stocks"}
 # these return no 'symbol': 'X.NS' field, so they cannot be checked for entity drift
 _NO_SYMBOL_TOOLS = {"get_shareholding", "get_forensics", "get_valuation_context",
                     "get_corporate_events", "get_management_commentary",
-                    "get_annual_report_notes"}
+                    "get_annual_report_notes", "get_broker_consensus", "search_broker_research",
+                    "get_trendlyne_view", "search_filings"}
 
 _SYMBOL_RE = re.compile(r"'symbol':\s*'([A-Z0-9&\-]+)\.(?:NS|BO)'")
 _NUM_RE = re.compile(r"-?\d[\d,]*(?:\.\d+)?")
-_QUOTE_RE = re.compile(r"[\"“”]([^\"“”]{40,})[\"“”]|^>\s?(.+)$", re.MULTILINE)
+_CURLY_QUOTE_RE = re.compile(r"“([^”\n]+)”")
+_BLOCKQUOTE_RE = re.compile(r"^>\s?(.+)$", re.MULTILINE)
 _WARN_WORDS = ("warning", "caution", "unreliable", "corporate action", "distort",
                "demerger", "inconsist", "treat with care")
 
@@ -44,7 +48,9 @@ def _norm(t: str) -> str:
 
 
 def _tool_blob(trace: dict) -> str:
-    return "\n".join(c.get("result", "") or "" for c in trace.get("tool_calls", []))
+    """Everything the analyst was given: tool results and the evidence pack's fact sheet."""
+    sheet = (trace.get("evidence") or {}).get("fact_sheet") or ""
+    return "\n".join([*(c.get("result", "") or "" for c in trace.get("tool_calls", [])), sheet])
 
 
 # ------------------------------------------------------------------ checks
@@ -81,28 +87,55 @@ def check_task_completion(trace: dict) -> dict:
     return _ok("task_completion", True, f"report {n} chars")
 
 
+def _quoted_spans(text: str) -> list[str]:
+    """Every span the report presents AS a quotation.
+
+    Straight quotes have no direction, so scanning for '"40+ chars"' also matches the GAP between two
+    short quoted words: on a live report, 'maintaining "Buy" ratings ... "super-prime"' was read as a
+    quotation and failed provenance. Straight quotes are therefore paired in order, within one line;
+    curly quotes and markdown blockquotes are unambiguous."""
+    spans = [m.group(1) for m in _CURLY_QUOTE_RE.finditer(text)]
+    for line in text.splitlines():
+        parts = line.split('"')
+        spans += parts[1:len(parts) - 1:2]          # inside each pair; an unpaired quote is ignored
+    return spans + [m.group(1) for m in _BLOCKQUOTE_RE.finditer(text)]
+
+
 def _windows(words: list[str], size: int) -> list[str]:
     return [" ".join(words[i:i + size]) for i in range(max(1, len(words) - size + 1))]
 
 
+_ELLIPSIS = re.compile(r"\s*(?:\.\.\.|…)\s*")
+
+
+def _traced(quote: str, corpus: str) -> bool:
+    parts = [p for p in _ELLIPSIS.split(quote) if p.strip()]
+    if len(parts) > 1:
+        # an elided quote ('higher P/E ratios... shrink the margin of safety' leaves out 'and interest
+        # rates'): every piece of 3+ words must be verbatim, and the pieces must reach the quote length
+        pieces = [_norm(p) for p in parts if len(_norm(p).split()) >= 3]
+        return bool(pieces) and all(p in corpus for p in pieces) and \
+            sum(len(p.split()) for p in pieces) >= settings.min_quote_words
+    return any(w in corpus for w in _windows(_norm(quote).split(), settings.min_quote_words))
+
+
 def check_citation_provenance(trace: dict) -> dict:
-    """Long quoted spans must appear in a retrieved chunk (the fabricated-Graham-quote bug)."""
+    """Long quoted spans must appear in what the analyst was given (the fabricated-Graham-quote bug): the
+    retrieved passages, a tool's result (an earnings-call sentence from get_management_commentary) or the
+    evidence pack's fact sheet."""
     chunks = trace.get("retrieved_chunks", [])
-    if not chunks:
+    tools = _tool_blob(trace)
+    if not chunks and not tools.strip():
         return _ok("citation_provenance", True, "nothing retrieved", applicable=False)
-    corpus = _norm(" ".join(c.get("text", "") for c in chunks))
-    quotes = []
-    for m in _QUOTE_RE.finditer(trace.get("report", "") or ""):
-        q = (m.group(1) or m.group(2) or "").strip()
-        if len(q.split()) >= settings.min_quote_words:
-            quotes.append(q)
+    corpus = _norm(" ".join(c.get("text", "") for c in chunks) + " " + tools)
+    quotes = [q.strip() for q in _quoted_spans(trace.get("report", "") or "")
+              if len(q.split()) >= settings.min_quote_words]
     if not quotes:
         return _ok("citation_provenance", True, "no long quotes to verify", applicable=False)
-    unsupported = [q[:70] for q in quotes
-                   if not any(w in corpus for w in _windows(_norm(q).split(), settings.min_quote_words))]
+    unsupported = [q[:70] for q in quotes if not _traced(q, corpus)]
     return _ok("citation_provenance", not unsupported,
-               f"{len(unsupported)}/{len(quotes)} quotes NOT in retrieved text: {unsupported[:2]}"
-               if unsupported else f"all {len(quotes)} quote(s) traced to retrieved text")
+               f"{len(unsupported)}/{len(quotes)} quotes NOT in the evidence: {unsupported[:2]}"
+               if unsupported else f"all {len(quotes)} quote(s) traced to the evidence")
 
 
 def _report_numbers(text: str, min_decimals: int = 2) -> list[tuple[float, int, str]]:
@@ -152,8 +185,10 @@ def check_numeric_provenance(trace: dict) -> dict:
 
 
 def check_source_diversity(trace: dict) -> dict:
-    """Retrieval must not collapse onto one book (the vanished-Coffee-Can bug)."""
-    chunks = trace.get("retrieved_chunks", [])
+    """Retrieval must not collapse onto one book (the vanished-Coffee-Can bug). Broker passages are
+    not books: two broker notes beside one book is still one book."""
+    chunks = [c for c in trace.get("retrieved_chunks", [])
+              if c.get("tool", "penny_stock_researcher") == "penny_stock_researcher"]
     if not chunks:
         return _ok("source_diversity", True, "researcher not used", applicable=False)
     srcs = {c.get("source") for c in chunks}
@@ -177,7 +212,8 @@ _TOOL_RULES = [
     (("peer", "peers", "sector median", "industry median", "versus its history", "expensive",
       "cheap", "overvalued", "undervalued", "re-rating", "rerating"), "get_valuation_context"),
     (("auditor", "announcement", "insider", "credit rating", "downgrade", "litigation",
-      "news flow", "regulatory", "default"), "get_corporate_events"),
+      "news flow", "regulatory", "default", "invoked", "invocation", "insider buying",
+      "insider selling", "rating action"), "get_corporate_events"),
     (("management", "guidance", "commentary", "concall", "earnings call", "conference call",
       "what management said", "tone", "credibility", "promised"), "get_management_commentary"),
     (("contingent liabilit", "related party", "related-party", "off balance sheet",
@@ -185,25 +221,34 @@ _TOOL_RULES = [
       "disputed tax", "promoter group dealing"), "get_annual_report_notes"),
     (("screen", "shortlist", "find me stocks", "which stocks", "candidates", "universe",
       "best stocks in"), "screen_stocks"),
+    (("broker", "brokers", "brokerage", "target price", "price target", "consensus", "sell-side",
+      "sell side", "analyst rating", "analyst ratings", "estimate revision", "earnings revision"),
+     "get_broker_consensus"),
+    (("broker report", "broker reports", "research report", "research reports",
+      "brokerage report", "brokerage reports", "broker thesis", "broker's thesis"),
+     "search_broker_research"),
+    (("trendlyne", "dvm", "durability score", "momentum score", "valuation score"), "get_trendlyne_view"),
+    (("filing", "filings", "disclose", "disclosed", "disclosure", "investor presentation", "rating rationale"),
+     "search_filings"),
     (("graham", "philosophy", "principle", "behavioral", "behavioural", "trap", "wisdom", "framework",
       "psychology", "classic error", "old-timer"), "penny_stock_researcher"),
     (("quote", "current price", "pull its", "pull me"), "get_indian_stock_data"),
 ]
 
 
+def expected_tools(question: str) -> list[str]:
+    """The tools a question clearly needs (one per rule that fires). The analyst graph uses it too."""
+    q = (question or "").lower()
+    # word-boundary match: plain `in` made "stake" fire on "mistakes" and "fii" on any word
+    return [tool for keywords, tool in _TOOL_RULES
+            if any(re.search(rf"\b{re.escape(k)}\b", q) for k in keywords)]
+
+
 def check_tool_coverage(trace: dict) -> dict:
     """If the question clearly needs a tool, that tool must have been called."""
-    q = (trace.get("query") or "").lower()
     used = {c.get("name") for c in trace.get("tool_calls", [])}
-    expected, missing = 0, []
-    # word-boundary match: plain `in` made "stake" fire on "mistakes" and "fii" on any word
-    def mentions(kw: str) -> bool:
-        return re.search(rf"\b{re.escape(kw)}\b", q) is not None
-    for keywords, tool in _TOOL_RULES:
-        if any(mentions(k) for k in keywords):
-            expected += 1
-            if tool not in used:
-                missing.append(tool)
+    wanted = expected_tools(trace.get("query") or "")
+    expected, missing = len(wanted), [t for t in wanted if t not in used]
     if not expected:
         return _ok("tool_coverage", True, "no tool-specific intent detected", applicable=False)
     return _ok("tool_coverage", not missing,
@@ -243,9 +288,90 @@ def check_pledge_disclosed(trace: dict) -> dict:
                else "pledge is UNKNOWN but the report never says so - reads as 'no pledge'")
 
 
+def check_context_fits(trace: dict) -> dict:
+    """Every model call must fit its window. Ollama drops the oldest messages of an over-long prompt
+    WITHOUT an error - which once made a report call data 'not returned' that the tools had returned."""
+    calls = trace.get("llm_calls")
+    if not calls:
+        return _ok("context_fits", True, "no token log in this trace", applicable=False)
+    bad = [c for c in calls if c.get("context_full") or c.get("prompt_near_limit")]
+    if bad:
+        worst = max(bad, key=lambda c: (c.get("input_tokens") or 0) + (c.get("output_tokens") or 0))
+        return _ok("context_fits", False,
+                   f"{len(bad)} of {len(calls)} model calls filled or nearly filled their window; worst: "
+                   f"{worst['role']} {worst.get('input_tokens')}+{worst.get('output_tokens')} "
+                   f"of {worst.get('num_ctx')}")
+    peak = max(((c.get("input_tokens") or 0) / c["num_ctx"] for c in calls if c.get("num_ctx")), default=0)
+    return _ok("context_fits", True, f"{len(calls)} model calls; largest prompt {peak:.0%} of its window")
+
+
+# A report must not call data missing that a tool returned. The DIXON report of 2026-10-10 said "No
+# Piotroski F-Score or Altman Z-Score was returned in the provided data" - get_forensics had returned both;
+# the context had dropped them.
+_MISSING = re.compile(
+    r"\b(not\s+(?:been\s+)?(?:returned|provided|available|included|disclosed|reported|found)|"
+    r"unavailable|no\s+data|data\s+gaps?|missing|unverified|unchecked|"
+    r"could\s+not\s+be\s+(?:verified|confirmed|assessed|quantified|extracted)|"
+    r"no\s+\S[^.]{0,80}?\b(?:was|were|is|are|has\s+been|have\s+been)\s+"
+    r"(?:returned|provided|available|included|disclosed|reported|found))\b", re.I)
+# topic words in a sentence -> the tool whose result settles it, and how to tell the result really carries it
+_HAVE = [
+    (("piotroski", "altman", "beneish", "forensic"), "get_forensics", lambda r: "'piotroski'" in r),
+    (("promoter holding", "shareholding", "fii", "dii"), "get_shareholding",
+     lambda r: "'promoter_pct'" in r and "'promoter_pct': None" not in r),
+    (("pledge", "pledging"), "get_shareholding",
+     lambda r: "'pledge_pct_of_promoter_holding'" in r and "'pledge_pct_of_promoter_holding': None" not in r),
+    (("revenue", "net profit", "net income"), "get_financials", lambda r: "'revenue_cr': {" in r),
+    (("historical p/e", "own history", "p/e band", "peer median"), "get_valuation_context",
+     lambda r: "'vs_own_history'" in r),
+    (("contingent liabilit",), "get_annual_report_notes", lambda r: "'machine_verified': True" in r),
+    (("related-party", "related party"), "get_annual_report_notes",
+     lambda r: "'source': 'NSE Reg 23(9) XBRL'" in r),
+]
+
+
+def check_no_false_missing(trace: dict) -> dict:
+    if not trace.get("report"):
+        return _ok("no_false_missing", True, "no report", applicable=False)
+    results: dict[str, list[str]] = {}
+    for c in trace.get("tool_calls", []):
+        results.setdefault(c.get("name"), []).append(c.get("result") or "")
+    wrong = []
+    for sentence in re.split(r"(?<=[.!?])\s+|\n+", trace["report"]):
+        low = sentence.lower()
+        if not _MISSING.search(low):
+            continue
+        for words, tool, has in _HAVE:
+            if any(w in low for w in words) and any(has(r) for r in results.get(tool, [])):
+                wrong.append(f"{tool}: '{sentence.strip()[:90]}'")
+    return _ok("no_false_missing", not wrong, "; ".join(wrong[:3]) if wrong else "no false 'missing' claims")
+
+
+# The report must end as a finished text. The DIXON report of 2026-10-10 ended '...a mid-range performer
+# (Durability: High' and still scored 4/5. A bullet that ends in a figure ('at Rs 12,097') is finished.
+_DANGLING = re.compile(r"\b(and|or|but|the|a|an|of|to|with|for|in|on|at|by|from|as|is|are|was|were|"
+                       r"which|that|than|its|their)$", re.I)
+
+
+def check_report_complete(trace: dict) -> dict:
+    report = (trace.get("report") or "").rstrip()
+    if not report:
+        return _ok("report_complete", False, "no report")
+    analyst = [c for c in trace.get("llm_calls") or [] if c.get("role") == "analyst"]
+    if analyst and analyst[-1].get("done_reason") == "length":
+        return _ok("report_complete", False, "the final draft stopped at its length limit")
+    last = report.splitlines()[-1].strip()
+    unclosed = last.count("(") > last.count(")") or last.count("[") > last.count("]")
+    unfinished = len(last.split()) >= 6 and not re.search(r"[.!?)\]\"'”’*_|%:\d]$", last)
+    if unclosed or unfinished or _DANGLING.search(last):
+        return _ok("report_complete", False, f"ends mid-sentence: '...{last[-60:]}'")
+    return _ok("report_complete", True, f"ends: '...{last[-40:]}'")
+
+
 ALL_CHECKS = [check_entity_consistency, check_no_unknown_tools, check_task_completion,
               check_citation_provenance, check_numeric_provenance, check_source_diversity,
-              check_tool_coverage, check_data_warning_surfaced, check_pledge_disclosed]
+              check_tool_coverage, check_data_warning_surfaced, check_pledge_disclosed, check_context_fits,
+              check_no_false_missing, check_report_complete]
 
 
 def run_all(trace: dict) -> list[dict]:

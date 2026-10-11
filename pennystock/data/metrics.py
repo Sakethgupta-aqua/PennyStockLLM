@@ -12,6 +12,7 @@ thresholds change; inputs do not, so a re-scored screen never needs a re-fetch.
 from __future__ import annotations
 
 import logging
+import math
 import sqlite3
 from dataclasses import asdict, dataclass, fields
 from datetime import datetime, timedelta
@@ -73,6 +74,29 @@ class StockMetrics:
 
 
 _FIELDS = [f.name for f in fields(StockMetrics)]
+_NUMERIC = {f.name for f in fields(StockMetrics) if str(f.type).startswith(("float", "int"))}
+
+
+def _finite_or_none(value):
+    """A numeric field's value, or None if it is not a finite number.
+
+    yfinance hands back the STRING 'Infinity' as the P/E of a near-zero-earnings company, and this
+    table is not type-strict, so the text was stored as-is. Four such rows crashed the screen the
+    moment they reached the percentile sort. Unknown is the honest value for 'not a number'.
+    """
+    if value is None or isinstance(value, bool):
+        return value
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return None
+    if not math.isfinite(number):
+        return None
+    return value if isinstance(value, (int, float)) else number
+
+
+def _clean(row: dict) -> dict:
+    return {k: (_finite_or_none(v) if k in _NUMERIC else v) for k, v in row.items()}
 
 
 def _connect():
@@ -92,7 +116,7 @@ def save_metrics(rows: list[StockMetrics]) -> int:
         con.executemany(
             f"INSERT INTO stock_metrics ({cols}) VALUES ({placeholders})"
             f" ON CONFLICT(symbol) DO UPDATE SET {updates}",
-            [tuple((asdict(r) | {"fetched_at": now})[c] for c in _FIELDS) for r in rows])
+            [tuple(_clean(asdict(r) | {"fetched_at": now})[c] for c in _FIELDS) for r in rows])
     return len(rows)
 
 
@@ -101,7 +125,7 @@ def load_metrics(max_age_days: int | None = None) -> list[StockMetrics]:
     with _connect() as con:
         con.row_factory = sqlite3.Row
         rows = con.execute(f"SELECT {', '.join(_FIELDS)} FROM stock_metrics").fetchall()
-    out = [StockMetrics(**dict(r)) for r in rows]
+    out = [StockMetrics(**_clean(dict(r))) for r in rows]
     if max_age_days is None:
         return out
     cutoff = datetime.now() - timedelta(days=max_age_days)

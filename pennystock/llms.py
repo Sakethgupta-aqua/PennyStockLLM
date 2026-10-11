@@ -18,8 +18,12 @@ from langchain_ollama import ChatOllama
 from pennystock.config import settings
 
 
-def _make(model: str, temperature: float, keep_alive: str) -> ChatOllama:
-    return ChatOllama(model=model, temperature=temperature, keep_alive=keep_alive, num_ctx=settings.num_ctx)
+def _make(model: str, temperature: float, keep_alive: str, reasoning: bool | None = None,
+          num_ctx: int | None = None, num_predict: int | None = None) -> ChatOllama:
+    # reasoning=None sends nothing and leaves the model's own default; only roles that run a
+    # thinking-capable model pass True/False (see settings.analyst_reasoning)
+    return ChatOllama(model=model, temperature=temperature, keep_alive=keep_alive,
+                      num_ctx=num_ctx or settings.num_ctx, reasoning=reasoning, num_predict=num_predict)
 
 
 def data_agent_llm() -> ChatOllama:
@@ -27,15 +31,20 @@ def data_agent_llm() -> ChatOllama:
 
 
 def analyst_llm() -> ChatOllama:
-    return _make(settings.analyst_model, temperature=0.2, keep_alive=settings.large_model_keep_alive)
+    return _make(settings.analyst_model, temperature=0.2, keep_alive=settings.large_model_keep_alive,
+                 reasoning=settings.analyst_reasoning, num_ctx=settings.large_num_ctx)
 
 
 def judge_llm() -> ChatOllama:
-    return _make(settings.judge_model, temperature=0.0, keep_alive=settings.large_model_keep_alive)
+    return _make(settings.judge_model, temperature=0.0, keep_alive=settings.large_model_keep_alive,
+                 num_predict=settings.judge_max_tokens)
 
 
-def supervisor_llm() -> ChatOllama:
-    return _make(settings.supervisor_model, temperature=0.0, keep_alive=settings.small_model_keep_alive)
+def extraction_llm() -> ChatOllama:
+    """The analyst's model, offline: lays a contingent-liability table out as rows. It computes nothing -
+    every number it returns is verified against the page in code - so thinking is off; warm across a batch."""
+    return _make(settings.analyst_model, temperature=0.0, keep_alive=settings.extraction_keep_alive,
+                 reasoning=False, num_ctx=settings.extraction_num_ctx)
 
 
 @lru_cache(maxsize=1)
@@ -49,4 +58,6 @@ def grounding_llm() -> ChatOllama:
     """Independent auditor for the CRAG grounding gate (deliberately NOT the analyst's own model).
 
     Uses the LARGE keep-alive because grounding_model is a 35B: pinning it would hold ~23GB."""
-    return _make(settings.grounding_model, temperature=0.0, keep_alive=settings.large_model_keep_alive)
+    return _make(settings.grounding_model, temperature=0.0, keep_alive=settings.large_model_keep_alive,
+                 reasoning=settings.grounding_reasoning, num_ctx=settings.large_num_ctx,
+                 num_predict=settings.grounding_max_tokens)    # a verdict, never an essay (2026-10-11)

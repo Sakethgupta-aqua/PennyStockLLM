@@ -140,6 +140,82 @@ def _metrics_status() -> str:
     return f"{len(cached_symbols())} symbols cached, last {last_fetched()}"
 
 
+def _ledger_refresh() -> str:
+    """Grade every prediction whose horizon has arrived. The other half of the loop: the
+    ledger remembers what was said, this finds out what happened."""
+    from pennystock.data.outcomes import track
+    graded = track()
+    if not graded:
+        return "nothing due for grading"
+    from collections import Counter
+    return f"graded {len(graded)} outcome(s): {dict(Counter(o.label for o in graded))}"
+
+
+def _ledger_status() -> str:
+    from pennystock.data.ledger import counts
+    c = counts()
+    return (f"{c['predictions']} prediction(s) {c['by_source']}, "
+            f"{c['graded_outcomes']} graded, {c['open_outcomes']} open")
+
+
+def _ledger_is_stale() -> bool:
+    """Stale means a prediction is old enough to grade and has not been. Unlike the other
+    caches this is not about age - a ledger is never out of date, it is only behind."""
+    from pennystock.config import settings as _s
+    from pennystock.data.ledger import pending
+    return any(pending(h) for h in _s.ledger_horizons)
+
+
+def _events_refresh() -> str:
+    """The newest disclosures: market-wide months not yet complete, companies not fetched within a week,
+    then their ledger calls. A full backfill is scripts/ingest_events.py."""
+    from datetime import date, timedelta
+    from pennystock.data import event_signals as es
+    from pennystock.data.metrics import load_metrics
+    from pennystock.data.nse_client import NseFeed
+    nse, universe = NseFeed(), {m.symbol for m in load_metrics()}
+    since = date.today() - timedelta(days=settings.events_stale_days + 30)
+    tally = es.ingest(since, date.today(), nse.api, nse.get, universe)
+    return f"{tally}; ledger: {es.record_predictions(symbols=universe)} new event call(s)"
+
+
+def _events_status() -> str:
+    from pennystock.data import event_signals as es
+    st = es.status()
+    return f"{st['events']} events, {st['companies']} companies, last fetch {st['last_fetch']}"
+
+
+def _events_is_stale() -> bool:
+    from pennystock.data import event_signals as es
+    last = es.status()["last_fetch"]
+    return last is None or datetime.fromisoformat(last) < datetime.now() - timedelta(days=settings.events_stale_days)
+
+
+def _filings_refresh() -> str:
+    """Extract newly catalogued filings (text layer; OCR runs from scripts/index_filings.py) and embed
+    their passages."""
+    from pennystock.data import filing_text
+    from pennystock.retrieval.filing_search import index_passages
+    return f"text: {filing_text.index_texts()}; passages: {index_passages()}"
+
+
+def _filings_status() -> str:
+    from pennystock.data import filing_text
+    st = filing_text.status()
+    return f"{st['files']} files, {st['pages']} pages, {st['files_embedded']} embedded"
+
+
+def _filings_is_stale() -> bool:
+    """Stale when a catalogued filing has no extracted text, or a file's passages are not embedded."""
+    from pennystock.data import documents, filing_text
+    from pennystock.retrieval.filing_passages import CHUNKER_VERSION
+    with filing_text._connect() as con:
+        known = {k for (k,) in con.execute("SELECT doc_key FROM filing_docs")}
+        behind = con.execute("SELECT COUNT(*) FROM filing_texts WHERE passages_version != ?",
+                             (CHUNKER_VERSION,)).fetchone()[0]
+    return behind > 0 or any(d.doc_key not in known for d in documents.list_documents(kind="filing"))
+
+
 def datasets() -> list[Dataset]:
     from pennystock.data import metrics as metrics_mod
     from pennystock.data import peers as peers_mod
@@ -154,6 +230,9 @@ def datasets() -> list[Dataset]:
                 _ownership_status, cache_is_stale, _ownership_refresh),
         Dataset("metrics", f"~{settings.metrics_max_age_days}d",
                 _metrics_status, metrics_mod.is_stale, _metrics_refresh),
+        Dataset("events", f"~{settings.events_stale_days}d", _events_status, _events_is_stale, _events_refresh),
+        Dataset("filings index", "on new filings", _filings_status, _filings_is_stale, _filings_refresh),
+        Dataset("ledger", "nightly", _ledger_status, _ledger_is_stale, _ledger_refresh),
     ]
 
 

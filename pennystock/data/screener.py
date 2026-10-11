@@ -21,13 +21,14 @@ from __future__ import annotations
 
 import logging
 from collections import defaultdict
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 
+from pennystock.config import settings
 from pennystock.data.forensics import (DEBT_EBITDA_DANGER, ICR_DANGER, M_SCORE_FLAG, ZEM_DISTRESS)
 from pennystock.data.metrics import StockMetrics
 from pennystock.data.ownership import PLEDGE_SEVERE
 from pennystock.data.sectors import (DEFAULT_PROFILE, PROFILES, SectorProfile,
-                                     profile_for)
+                                     blind_spot_coverage, profile_for)
 
 # A sector needs at least this many names before ranking inside it is meaningful; below it the
 # percentile is noise and the whole-universe rank is the lesser evil.
@@ -74,15 +75,24 @@ def is_financial(m: StockMetrics) -> bool:
     return any(h in industry for h in FINANCIAL_INDUSTRY_HINTS)
 
 
-def screening_caveats(m: StockMetrics) -> list[str]:
+def screening_caveats(m: StockMetrics, covered: set[str] | frozenset[str] = frozenset()) -> list[str]:
     """What this screen could NOT judge about a name. Silence about a skipped check reads as a
     pass, which is the most dangerous thing a screen can do - so every sector states the metrics
-    it is genuinely judged on that this screen does not have."""
+    it is genuinely judged on that this screen does not have.
+
+    `covered` is the set of sector KPIs broker reports supply for this name. A blind spot they fill
+    is reported as such: claiming ignorance the screen no longer has misstates it just as badly."""
     prof = profile_for(m.sector, m.industry)
     out = []
     if prof.blind_spots:
-        out.append(f"[{prof.name}] not measured here: " + "; ".join(prof.blind_spots) +
-                   (f". {prof.note}" if prof.note else ""))
+        have, missing = blind_spot_coverage(prof, covered)
+        if missing:
+            # the rulebook note says none of these inputs is in the screen - false once one is
+            note = f". {prof.note}" if prof.note and not have else ""
+            out.append(f"[{prof.name}] not measured here: " + "; ".join(missing) + note)
+        if have:
+            out.append("Read from broker reports (attributed opinions, not audited figures): " +
+                       "; ".join(have))
     if prof.skip_metrics:
         out.append("Skipped as uncalibrated for this sector: " +
                    ", ".join(sorted(prof.skip_metrics)) + ". Promoter pledge WAS still checked.")
@@ -174,14 +184,56 @@ def veto_reasons(m: StockMetrics) -> list[tuple[str, str]]:
     return out
 
 
-def _percentiles(rows: list[StockMetrics], metric: str, higher_is_better: bool) -> dict[str, float]:
-    """Rank one metric across the rows given, 0.0 (worst) to 1.0 (best). Ties share a rank."""
-    present = sorted([(v, r.symbol) for r in rows if (v := getattr(r, metric)) is not None])
+_STOCK_FIELDS = {f.name for f in fields(StockMetrics)}
+# every broker KPI some rulebook may score on - what callers load from broker_metrics
+BROKER_KPI_METRICS = frozenset(m for p in PROFILES for ms in p.kpi_pillars.values() for m, _ in ms)
+
+
+def _rank(pairs: list[tuple[float, str]], higher_is_better: bool) -> dict[str, float]:
+    present = sorted(pairs)
     if len(present) < 2:
         return {}
     n = len(present) - 1
     ranked = {sym: i / n for i, (_, sym) in enumerate(present)}
     return ranked if higher_is_better else {s: 1.0 - p for s, p in ranked.items()}
+
+
+def _percentiles(rows: list[StockMetrics], metric: str, higher_is_better: bool) -> dict[str, float]:
+    """Rank one metric across the rows given, 0.0 (worst) to 1.0 (best). Ties share a rank."""
+    return _rank([(v, r.symbol) for r in rows if (v := getattr(r, metric)) is not None],
+                 higher_is_better)
+
+
+def kpi_coverage(rows: list[StockMetrics], kpis: dict[str, dict[str, float]],
+                 profile_name: str) -> dict[str, int]:
+    """How many of a rulebook's companies carry each of its broker KPIs."""
+    out: dict[str, int] = defaultdict(int)
+    for r in rows:
+        if profile_for(r.sector, r.industry).name == profile_name:
+            for metric in kpis.get(r.symbol, {}):
+                out[metric] += 1
+    return dict(out)
+
+
+def kpi_percentiles(rows: list[StockMetrics], kpis: dict[str, dict[str, float]], metric: str,
+                    higher_is_better: bool) -> dict[str, float]:
+    """Rank a broker KPI inside each rulebook that uses it - and only where enough names have it.
+
+    A sector KPI is never ranked across sectors (a bank's GNPA means nothing for a cement maker),
+    and never from a thin sample: below `broker_kpi_min_companies` the metric simply does not vote
+    for that rulebook. There is deliberately no whole-market fallback, unlike the core metrics.
+    """
+    groups: dict[str, list[tuple[float, str]]] = defaultdict(list)
+    for r in rows:
+        prof = profile_for(r.sector, r.industry)
+        if any(m == metric for ms in prof.kpi_pillars.values() for m, _ in ms):
+            if (v := kpis.get(r.symbol, {}).get(metric)) is not None:
+                groups[prof.name].append((v, r.symbol))
+    out: dict[str, float] = {}
+    for pairs in groups.values():
+        if len(pairs) >= settings.broker_kpi_min_companies:
+            out.update(_rank(pairs, higher_is_better))
+    return out
 
 
 def sector_percentiles(rows: list[StockMetrics], metric: str,
@@ -223,6 +275,7 @@ def pillars_for(profile: SectorProfile) -> dict[str, tuple[float, list[tuple[str
     for name, (weight, metrics) in PILLARS.items():
         if name == "valuation" and profile.valuation_metrics:
             metrics = list(profile.valuation_metrics)
+        metrics = list(metrics) + list(profile.kpi_pillars.get(name, ()))
         spec[name] = (profile.weights.get(name, weight), metrics)
     total = sum(w for w, _ in spec.values()) or 1.0
     return {k: (w / total, m) for k, (w, m) in spec.items()}      # weights must sum to 1
@@ -233,13 +286,21 @@ def applies_to(m: StockMetrics, metric: str) -> bool:
     return metric not in profile_for(m.sector, m.industry).skip_metrics
 
 
-def score_universe(rows: list[StockMetrics]) -> list[ScreenResult]:
-    """Percentile-score every row against ITS OWN SECTOR, on its own rulebook's weights."""
+def score_universe(rows: list[StockMetrics],
+                   kpis: dict[str, dict[str, float]] | None = None) -> list[ScreenResult]:
+    """Percentile-score every row against ITS OWN SECTOR, on its own rulebook's weights.
+
+    `kpis` ({symbol: {metric: value}}) are sector KPIs from broker reports. They join a pillar only
+    for a name that has them, in a rulebook where enough names have them - so a company without
+    broker coverage is scored exactly as before, and never marked down for the missing data."""
+    kpis = kpis or {}
     metrics_used = {m for _, ms in PILLARS.values() for m, _ in ms}
     metrics_used |= {m for p in (*PROFILES, DEFAULT_PROFILE) for m, _ in p.valuation_metrics}
     hib = {m: h for _, ms in PILLARS.values() for m, h in ms}
     hib.update({m: h for p in (*PROFILES, DEFAULT_PROFILE) for m, h in p.valuation_metrics})
+    kpi_hib = {m: h for p in PROFILES for ms in p.kpi_pillars.values() for m, h in ms}
     ranks = {m: sector_percentiles(rows, m, hib[m]) for m in metrics_used}
+    ranks.update({m: kpi_percentiles(rows, kpis, m, h) for m, h in kpi_hib.items()})
 
     results = []
     for r in rows:
@@ -247,7 +308,9 @@ def score_universe(rows: list[StockMetrics]) -> list[ScreenResult]:
         spec = pillars_for(prof)
         pillars, present, total = {}, 0, 0
         for name, (_, metrics) in spec.items():
-            applicable = [m for m, _ in metrics if applies_to(r, m)]
+            # a broker KPI counts only where it actually voted: absent coverage is not a data gap
+            applicable = [m for m, _ in metrics if applies_to(r, m)
+                          and (m in _STOCK_FIELDS or r.symbol in ranks.get(m, {}))]
             got = [ranks[m][r.symbol] for m in applicable if r.symbol in ranks.get(m, {})]
             # completeness measures DATA availability, so metrics that do not apply to this kind
             # of company are excluded from the denominator rather than counted as gaps
@@ -291,8 +354,11 @@ def balance_by_sector(results: list[ScreenResult], top_n: int) -> list[ScreenRes
 
 def screen(rows: list[StockMetrics], min_market_cap_cr: float = 500.0,
            min_turnover_cr: float = 1.0, min_completeness: float = 0.5,
-           apply_vetoes: bool = True) -> Funnel:
-    """Run the whole funnel and return both the survivors AND the audit trail of what was removed."""
+           apply_vetoes: bool = True, kpis: dict[str, dict[str, float]] | None = None,
+           events: dict[str, list[tuple[str, str]]] | None = None) -> Funnel:
+    """Run the whole funnel and return both the survivors AND the audit trail of what was removed.
+    `events` ({symbol: [(rule, detail)]}, from event_signals.veto_map) adds the severe corporate events
+    as one more veto gate."""
     f = Funnel(universe=len(rows))
 
     tradeable = [r for r in rows
@@ -302,7 +368,7 @@ def screen(rows: list[StockMetrics], min_market_cap_cr: float = 500.0,
 
     survivors = []
     for r in tradeable:
-        reasons = veto_reasons(r) if apply_vetoes else []
+        reasons = (veto_reasons(r) + (events or {}).get(r.symbol, [])) if apply_vetoes else []
         if reasons:
             for rule, _detail in reasons:            # bucket by RULE, never by the measured value
                 f.veto_reasons[rule] = f.veto_reasons.get(rule, 0) + 1
@@ -310,7 +376,7 @@ def screen(rows: list[StockMetrics], min_market_cap_cr: float = 500.0,
         survivors.append(r)
     f.after_vetoes = len(survivors)
 
-    scored = score_universe(survivors)
+    scored = score_universe(survivors, kpis)
     # a name scored on almost no data is noise dressed as a ranking, so drop it from the OUTPUT
     # rather than from the universe - it still counted towards everyone else's percentiles
     f.results = [s for s in scored if s.completeness >= min_completeness]

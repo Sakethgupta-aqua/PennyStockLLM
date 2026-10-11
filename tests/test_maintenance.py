@@ -14,9 +14,11 @@ def _ds(name, stale, refresh_fn=None):
                    refresh_fn or (lambda: f"{name} refreshed"))
 
 
-def test_status_covers_every_registered_cache():
+def test_status_covers_every_registered_cache(tmp_path, monkeypatch):
     """Every dataset in the registry must report status. This is what stops a new cache being
     added and then silently never refreshed - the failure mode the registry exists to prevent."""
+    # a throwaway database: unpatched, this test created tables in (and read) the REAL market.db
+    monkeypatch.setattr(mt.settings, "market_db", tmp_path / "test.db")
     reported = {r["dataset"] for r in status()}
     assert reported == {d.name for d in mt.datasets()}
     assert {"universe", "peers", "ownership", "metrics"} <= reported
@@ -77,3 +79,11 @@ def test_lock_is_released_even_when_the_body_raises(tmp_path):
         with single_flight(lock):
             raise ValueError("boom")
     assert not lock.exists()
+
+
+def test_event_signals_are_a_maintained_dataset():
+    assert "events" in {d.name for d in mt.datasets()}
+
+
+def test_the_filings_index_is_a_maintained_dataset():
+    assert "filings index" in {d.name for d in mt.datasets()}

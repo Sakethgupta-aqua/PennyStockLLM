@@ -130,6 +130,7 @@ async def main():
             "rerank_pool": settings.rerank_pool, "rerank_top_n": settings.rerank_top_n,
             "reranker_model": settings.reranker_model, "dense_k": settings.dense_k,
             "bm25_k": settings.bm25_k, "embed_model": settings.embed_model, "collection": settings.collection,
+            "device": settings.device, "half_precision": settings.half_precision,
         },
     }
     RESULTS.mkdir(parents=True, exist_ok=True)

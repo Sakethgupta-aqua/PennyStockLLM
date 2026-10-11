@@ -32,6 +32,7 @@ logger = logging.getLogger(__name__)
 _CHUNK_RE = re.compile(r"\[source:\s*([^\]]+)\]\s*")
 _SCORE_RE = re.compile(r"Score:\s*(\d)", re.IGNORECASE)
 JUDGE_PREFIX = "LLM Judge Evaluation"
+RETRIEVAL_TOOLS = ("penny_stock_researcher", "search_broker_research")
 
 
 def _truncate(text: str, limit: int | None = None) -> str:
@@ -60,13 +61,16 @@ def _extract_tool_calls(messages) -> list[dict]:
             pending[tc.get("id")] = {"name": tc.get("name", "?"), "args": tc.get("args", {})}
         if isinstance(m, ToolMessage):
             info = pending.pop(getattr(m, "tool_call_id", None), {"name": "?", "args": {}})
-            result = str(m.content)
+            # a result set aside to fit the analyst's window keeps its full text in `artifact`
+            trimmed = bool(m.additional_kwargs.get("trimmed")) and m.artifact is not None
+            result = str(m.artifact if trimmed else m.content)
             calls.append({
                 "seq": len(calls) + 1,
                 "name": info["name"],
                 "args": info["args"],
                 "result": _truncate(result),
                 "ok": not result.lstrip().startswith(("Error", "System Error")),
+                "trimmed": trimmed,
             })
     return calls
 
@@ -87,13 +91,21 @@ def _extract_report_and_judge(messages) -> tuple[str, dict]:
 def build_trace(query: str, final_state: dict, node_path=None, duration_s=None, error=None) -> dict:
     """Turn a finished graph state into a flat, self-contained trace record."""
     messages = (final_state or {}).get("messages", []) or []
-    calls = _extract_tool_calls(messages)
+    # the evidence pack's calls come first (they ran before the analyst), then the analyst's own, renumbered;
+    # the integrated-filing fetch is an input to the fact sheet, not one of the analyst's tools
+    evidence = (final_state or {}).get("evidence") or {}
+    pack = [{"seq": 0, "name": c["name"], "args": c["args"], "result": _truncate(c["result"]), "ok": c["ok"],
+             "trimmed": False, "source": "evidence_pack", "seconds": c["seconds"]}
+            for c in evidence.get("calls") or [] if c["name"] != "nse_integrated_filing"]
+    calls = [{**c, "seq": i} for i, c in enumerate(pack + _extract_tool_calls(messages), 1)]
     report, judge = _extract_report_and_judge(messages)
 
+    # both retrieval tools return '[source: X] text' passages; a quote is checked against either,
+    # and the tool is kept so the book-diversity check counts books only
     chunks: list[dict] = []
     for c in calls:
-        if c["name"] == "penny_stock_researcher":
-            chunks.extend(parse_retrieved_chunks(c["result"]))
+        if c["name"] in RETRIEVAL_TOOLS:
+            chunks.extend({**ch, "tool": c["name"]} for ch in parse_retrieved_chunks(c["result"]))
 
     return {
         "schema_version": 1,
@@ -105,18 +117,29 @@ def build_trace(query: str, final_state: dict, node_path=None, duration_s=None, 
         "resolved_name": (final_state or {}).get("resolved_name"),
         "node_path": node_path or [],
         "tool_calls": calls,
-        "retrieved_chunks": [{"source": c["source"], "text": _truncate(c["text"], 4000)} for c in chunks],
+        "evidence": {"fact_sheet": _truncate(evidence.get("fact_sheet") or ""),
+                     "built_at": evidence.get("built_at")} if evidence else None,
+        "retrieved_chunks": [{"source": c["source"], "text": _truncate(c["text"], 4000), "tool": c["tool"]}
+                             for c in chunks],
         "report": _truncate(report),
         "judge": judge,
         "revisions": (final_state or {}).get("revisions", 0),
         "grounding_retries": (final_state or {}).get("grounding_retries", 0),
+        # every model call's tokens against its window: Ollama trims an over-long prompt without an error
+        "llm_calls": (final_state or {}).get("llm_calls", []),
+        "context_overflow": any(c.get("context_full") or c.get("prompt_near_limit")
+                                for c in (final_state or {}).get("llm_calls", [])),
         "models": {"data": settings.data_model, "analyst": settings.analyst_model,
-                   "judge": settings.judge_model, "supervisor": settings.supervisor_model,
-                   "grounding": settings.grounding_model},
+                   "judge": settings.judge_model,
+                   "grounding": settings.grounding_model,
+                   # a 3.8x run-time difference hangs on this flag, so every trace records it
+                   "analyst_reasoning": settings.analyst_reasoning,
+                   "grounding_reasoning": settings.grounding_reasoning},
         "retrieval_config": {"collection": settings.collection, "embed_model": settings.embed_model,
                              "reranker_model": settings.reranker_model,
                              "rerank_top_n": settings.rerank_top_n,
-                             "research_subqueries": settings.research_subqueries},
+                             "research_subqueries": settings.research_subqueries,
+                             "device": settings.device, "half_precision": settings.half_precision},
         "error": error,
     }
 

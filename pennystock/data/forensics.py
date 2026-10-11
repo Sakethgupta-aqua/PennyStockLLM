@@ -148,7 +148,7 @@ def altman_z_emerging(fin: Financials) -> dict:
     z = round(3.25 + 6.56 * parts["working_capital/assets"] + 3.26 * parts["retained_earnings/assets"]
               + 6.72 * parts["ebit/assets"] + 1.05 * parts["book_equity/liabilities"], 2)
     zone = "SAFE" if z > ZEM_SAFE else ("DISTRESS" if z < ZEM_DISTRESS else "GREY")
-    return {"z_em_score": z, "zone": zone,
+    return {"z_em_score": z, "zone": zone, "safe_above": ZEM_SAFE, "distress_below": ZEM_DISTRESS,
             "model": "Altman Z''/EM (emerging markets) - the appropriate variant for India",
             "note": "Still unreliable for banks and NBFCs, whose balance sheets are structurally "
                     "different from operating companies."}

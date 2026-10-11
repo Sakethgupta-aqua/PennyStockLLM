@@ -12,11 +12,13 @@ from pennystock.config import settings
 
 @lru_cache(maxsize=1)
 def _reranker():
-    import torch
     from sentence_transformers import CrossEncoder
 
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    return CrossEncoder(settings.reranker_model, device=device, max_length=512)
+    from pennystock.devices import torch_device, torch_dtype
+
+    device = torch_device()
+    return CrossEncoder(settings.reranker_model, device=device, max_length=settings.rerank_max_tokens,
+                        model_kwargs={"torch_dtype": torch_dtype(device)})
 
 
 def rerank(query: str, docs: list[Document], top_n: int) -> list[Document]:

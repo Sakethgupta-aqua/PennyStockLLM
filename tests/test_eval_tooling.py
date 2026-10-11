@@ -94,3 +94,34 @@ def test_decomposition_falls_back_to_the_original_on_failure():
     with patch("pennystock.llms.decomposer_llm", side_effect=RuntimeError("ollama down")):
         out = asyncio.run(decompose_query("margin of safety"))
     assert out == ["margin of safety"]         # degrades, never breaks retrieval
+
+
+def test_saving_a_filings_golden_set_keeps_every_field(tmp_path):
+    import json
+
+    from review_eval_set import load, save
+    row = {"verified": False, "symbol": "AUBANK", "doc_type": "earnings_call",
+           "question": "Why did NIM fall?", "reference_answer": "Deposit costs rose.", "content_sha": "s1",
+           "page_from": 7, "page_to": 8,
+           "source_id": "s1-00001", "source_text": "a long passage"}
+    path = tmp_path / "filings_golden.jsonl"
+    save([row], path)
+    assert load(path) == [row]                                   # no field dropped on a re-save
+    keys = list(json.loads(path.read_text()))
+    assert keys[0] == "verified" and keys[-1] == "source_text"   # the long passage stays last on the line
+
+
+def test_the_filings_eval_reads_a_large_collection_in_pages():
+    # one unpaged get() over the 90,513 filing passages broke SQLite's limit on query variables (2026-10-07)
+    from build_filings_eval import all_metadatas
+
+    class Collection:
+        def count(self):
+            return 12_001
+
+        def get(self, include, limit=None, offset=0):
+            assert limit is not None and limit <= 5000
+            ids = [f"p{i}" for i in range(offset, min(offset + limit, 12_001))]
+            return {"ids": ids, "metadatas": [{"n": i} for i in range(len(ids))]}
+    ids, metas = all_metadatas(Collection())
+    assert len(ids) == len(set(ids)) == len(metas) == 12_001

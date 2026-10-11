@@ -17,6 +17,7 @@ Blocking network calls run in a thread so the LangGraph event loop stays respons
 """
 import asyncio
 import logging
+from datetime import datetime
 from dataclasses import asdict
 
 from langchain_core.tools import tool
@@ -24,8 +25,13 @@ from langchain_core.tools import tool
 from pennystock.config import settings
 from pennystock.data.fundamentals import snapshot_warnings, summarize_financials
 from pennystock.data.indicators import detect_structural_break, summarize
-from pennystock.data.annual_report import fetch_notes, summarize_notes
+from pennystock.data.annual_report import AnnualReportNotes, fetch_notes, notes_from_pages, summarize_notes
+from pennystock.data.contingent_liabilities import latest_report, summarize_cl
+from pennystock.data.contingent_liabilities import stored as stored_cl
 from pennystock.data.events import NseEventsProvider, summarize_events
+from pennystock.data.filing_text import pages_of
+from pennystock.data.integrated_filings import filed_year, rpt_disclosure
+from pennystock.data.event_signals import recent_summary
 from pennystock.data.forensics import summarize_forensics
 from pennystock.data.transcripts import fetch_transcripts, summarize_transcripts
 from pennystock.data.ownership import summarize_ownership
@@ -33,9 +39,21 @@ from pennystock.data.ownership_providers import get_ownership
 from pennystock.data.peers import compare_to_peers
 from pennystock.data.providers import get_provider
 from pennystock.data.valuation import valuation_bands
+from pennystock.data.related_parties import summarize_rpt
 from pennystock.data.resolver import resolve_symbol
+from pennystock.data.sectors import profile_for
 
 logger = logging.getLogger(__name__)
+
+
+def _quarter_end(label: str | None) -> str | None:
+    """'Jun 2026' -> '2026-06-30': the last day of the quarter a shareholding filing covers."""
+    import calendar
+    try:
+        month = datetime.strptime(str(label), "%b %Y")
+    except ValueError:
+        return None
+    return f"{month.year}-{month.month:02d}-{calendar.monthrange(month.year, month.month)[1]:02d}"
 
 
 def _resolve_ticker(symbol: str, exchange: str) -> tuple[str, str | None]:
@@ -86,6 +104,9 @@ async def get_stock_fundamentals(symbol: str, exchange: str = "NSE") -> str:
         fund = await asyncio.to_thread(get_provider().get_fundamentals, ticker)
         data = asdict(fund)
         data["company"] = data.get("company") or name
+        # Graham's margin of safety starts from the earnings yield; the live DIXON report worked out 1/37
+        pe = data.get("pe_trailing")
+        data["earnings_yield_pct"] = round(100 / pe, 2) if isinstance(pe, (int, float)) and pe > 0 else None
         warnings = snapshot_warnings(fund)
         if warnings:
             data["data_warnings"] = warnings
@@ -169,6 +190,14 @@ async def get_shareholding(symbol: str, exchange: str = "NSE") -> str:
         own = await asyncio.to_thread(get_ownership, base)
         summary = summarize_ownership(own, settings.ownership_lookback_quarters)
         summary["company"] = name
+        try:                                   # pledges created / invoked since the quarter the filing covers
+            events = await asyncio.to_thread(recent_summary, base)
+            # since the statutory reading's quarter - a newer quarter can be listed before its filing is read
+            q_end = _quarter_end(summary.get("pledge_quarter") or summary.get("as_of_quarter"))
+            summary["pledge_filings_since_quarter"] = [p for p in (events or {}).get("pledges", [])
+                                                       if q_end and p.get("date", "") > q_end]
+        except Exception as e:
+            logger.warning(f"pledge events unavailable for {symbol}: {e}")
         return str(summary)
     except Exception as e:
         logger.warning(f"shareholding fetch failed for {symbol}: {e}")
@@ -234,10 +263,12 @@ async def get_corporate_events(symbol: str, exchange: str = "NSE") -> str:
     """CORPORATE EVENTS & NEWS FLOW from NSE's statutory filings - what moves a stock before the
     numbers show it.
 
-    Returns MATERIAL announcements only (routine compliance filings are screened out): auditor
-    resignations, defaults/insolvency, fraud or enforcement action, credit-rating actions, pledge
-    events, senior-management exits, litigation, fund raises, M&A. Plus SEBI insider-trading
-    disclosures with a buy/sell tally, and the latest credit rating and action.
+    Returns MATERIAL announcements (routine compliance filings are screened out): auditor
+    resignations, defaults/insolvency, fraud or enforcement action, senior-management exits,
+    litigation, fund raises, M&A. Plus `stored_events`, the last 12 months of DATED disclosures:
+    insider buying/selling by promoters, directors and KMP, promoter pledges created/invoked, credit-
+    rating upgrades/downgrades/Issuer Not Cooperating, severe events (which keep a stock out of the
+    screen), and each event type's track record in this system's ledger.
 
     An auditor resigning mid-term is never routine and is among the highest-signal warnings in
     Indian markets. If no announcement data comes back, say event risk is UNCHECKED, not clean."""
@@ -247,6 +278,9 @@ async def get_corporate_events(symbol: str, exchange: str = "NSE") -> str:
         ev = await asyncio.to_thread(NseEventsProvider().fetch, base)
         out = summarize_events(ev)
         out["company"] = name
+        stored = await asyncio.to_thread(recent_summary, base)
+        out["stored_events"] = stored or ("UNCHECKED - no stored insider, pledge or rating events for "
+                                          "this company (scripts/ingest_events.py). Do not read this as clean.")
         return str(out)
     except Exception as e:
         logger.warning(f"corporate events failed for {symbol}: {e}")
@@ -282,41 +316,73 @@ async def get_management_commentary(symbol: str, exchange: str = "NSE") -> str:
         return f"Error fetching management commentary for {symbol}."
 
 
+def _is_lender(ticker: str) -> bool:
+    f = get_provider().get_fundamentals(ticker)
+    return profile_for(f.sector, f.industry).name == "financials"
+
+
+def _excerpt_notes(base: str) -> AnnualReportNotes:
+    """The two notes as text: from the report already in filings.db, else NSE's PDF (the old download
+    path)."""
+    report = latest_report(base)
+    if report:
+        texts = [p["text"] for p in pages_of(report["content_sha"])]
+        return notes_from_pages(base, texts, None, None, report.get("fiscal_period"))
+    return fetch_notes(base)
+
+
+async def _yardsticks(ticker: str, fy) -> tuple[float | None, float | None, str]:
+    """Net worth and revenue to judge the notes by: the company's own NSE filing, else Yahoo's latest year."""
+    if fy and fy.equity_to_owners_cr is not None:
+        return (fy.equity_to_owners_cr, fy.revenue_cr,
+                f"NSE integrated filing {fy.fiscal_year} ({(fy.broadcast_at or '')[:11]})")
+    fin = await asyncio.to_thread(get_provider().get_financials, ticker, settings.financials_years)
+
+    def latest(xs):                          # series run oldest -> newest
+        return next((v for v in reversed(xs or []) if v is not None), None)
+    return latest(fin.equity_cr), latest(fin.revenue_cr), "Yahoo statements"
+
+
 @tool
 async def get_annual_report_notes(symbol: str, exchange: str = "NSE") -> str:
-    """OFF-BALANCE-SHEET & PROMOTER-CONFLICT CHECK, read from the annual report itself.
+    """OFF-BALANCE-SHEET & RELATED-PARTY CHECK, from the company's own filings.
 
-    Two notes at the back of the annual report that no free structured feed carries, and that
-    Indian analysts have checked before buying for forty-odd years:
+      contingent_liabilities - the annual report's note, read into numbers and VERIFIED against the page
+        (machine_verified True): disputed claims, guarantees given for others (the red-flag class) and
+        trade-finance contingents, in Rs crore, judged against NET WORTH. A guarantee to a group company or a
+        large disputed tax demand is real risk that sits off the balance sheet. When machine_verified is False
+        you get the note's text and candidate figures, which are HINTS only.
+      related_party_transactions - the company's half-yearly related-party disclosure to NSE (SEBI Reg 23(9),
+        XBRL): totals by kind of related party, the largest counterparties outside the subsidiaries and any
+        loans or guarantees to them, judged against the same half-year's REVENUE (~10% is the long-standing
+        threshold) - and, just as important, WHO the counterparties are.
 
-      contingent_liabilities - obligations that are NOT on the balance sheet: guarantees given for
-        group companies, disputed tax and regulatory demands. A company can look unlevered on the
-        face of the balance sheet while guaranteeing the debts of the wider promoter group. Judge
-        the totals AGAINST NET WORTH; a large ratio is real risk sitting off the books.
-      related_party_transactions - the classic route by which value leaves a listed company and
-        arrives at a promoter-owned one. Judge SIZE against revenue (a long-standing threshold is
-        roughly 10%) and, just as importantly, the REASON given for the dealing.
-
-    `figures_mentioned` are numbers scraped from a PDF table that does NOT survive extraction
-    cleanly. They are HINTS to verify against `source_url` - never quote them as parsed totals, and
-    say they are indicative if you cite them. If nothing is returned, report off-balance-sheet
-    exposure and related-party dealings as UNCHECKED - never as clean."""
+    If nothing is returned, report off-balance-sheet exposure and related-party dealings as UNCHECKED -
+    never as clean. `symbol` may be a company name or a ticker."""
     try:
         ticker, name = _resolve_ticker(symbol, exchange)
         base = ticker.rsplit(".", 1)[0]
-        notes = await asyncio.to_thread(fetch_notes, base)
-        # net worth and revenue are the yardsticks the two notes are judged against, so fetch them
-        # here rather than hoping the analyst carried them over from another tool call
-        net_worth = revenue = None
-        try:
-            fin = await asyncio.to_thread(get_provider().get_financials, ticker,
-                                          settings.financials_years)
-            net_worth = fin.equity_cr[0] if fin.equity_cr else None
-            revenue = fin.revenue_cr[0] if fin.revenue_cr else None
-        except Exception as e:                       # the notes are still worth returning alone
-            logger.warning(f"net-worth/revenue context unavailable for {symbol}: {e}")
-        out = await asyncio.to_thread(summarize_notes, notes, net_worth, revenue)
-        out["company"] = name
+        fy = await asyncio.to_thread(filed_year, base)
+        net_worth, revenue, source = await _yardsticks(ticker, fy)
+        cl = await asyncio.to_thread(stored_cl, base)
+        rpt = await asyncio.to_thread(rpt_disclosure, base)
+        verified = bool(cl and cl.get("status") == "verified")
+        notes = None if (verified and rpt) else await asyncio.to_thread(_excerpt_notes, base)
+        excerpt = summarize_notes(notes, net_worth, revenue) if notes else {}
+        if verified:
+            cl_view = summarize_cl(cl, net_worth, await asyncio.to_thread(_is_lender, ticker))
+        else:
+            why = (f"the note was read but not verified ({cl['status']})" if cl else
+                   "the note has not been machine-read yet (scripts/extract_contingent_liabilities.py)")
+            cl_view = {**(excerpt.get("contingent_liabilities") or {}), "machine_verified": False, "why": why}
+        rpt_view = summarize_rpt(rpt) if rpt else {
+            **(excerpt.get("related_party_transactions") or {}), "machine_verified": False,
+            "why": "no related-party disclosure found in the company's NSE integrated filings"}
+        out = {"symbol": base, "company": name, "contingent_liabilities": cl_view,
+               "related_party_transactions": rpt_view,
+               "yardsticks": {"net_worth_cr": net_worth, "revenue_cr": revenue, "source": source}}
+        if not (verified and rpt) and excerpt.get("caveat"):
+            out["caveat"] = excerpt["caveat"]
         return str(out)
     except Exception as e:
         logger.warning(f"annual report notes failed for {symbol}: {e}")

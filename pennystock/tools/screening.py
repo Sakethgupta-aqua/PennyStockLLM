@@ -10,7 +10,7 @@ import logging
 from langchain_core.tools import tool
 
 from pennystock.data.metrics import load_metrics
-from pennystock.data.screener import screen
+from pennystock.data.screener import BROKER_KPI_METRICS, screen
 
 logger = logging.getLogger(__name__)
 MAX_RESULTS = 25
@@ -27,7 +27,13 @@ def _run(sector: str | None, min_market_cap_cr: float, min_turnover_cr: float, t
         if not rows:
             return {"screen": "no cached stocks in that sector",
                     "sectors_available": sorted({r.sector for r in load_metrics() if r.sector})}
-    f = screen(rows, min_market_cap_cr=min_market_cap_cr, min_turnover_cr=min_turnover_cr)
+    try:
+        from pennystock.data.broker_metrics import screening_kpis
+        kpis = screening_kpis(BROKER_KPI_METRICS)
+    except Exception as e:                    # broker data is a bonus; never a reason to fail
+        logger.warning(f"broker KPIs unavailable: {type(e).__name__}: {e}")
+        kpis = {}
+    f = screen(rows, min_market_cap_cr=min_market_cap_cr, min_turnover_cr=min_turnover_cr, kpis=kpis)
     return {
         "funnel": {"universe": f.universe, "tradeable": f.after_liquidity,
                    "survived_veto_gates": f.after_vetoes, "removed_by": f.veto_reasons},

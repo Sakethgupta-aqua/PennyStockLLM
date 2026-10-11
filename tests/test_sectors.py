@@ -172,3 +172,37 @@ def test_scoring_end_to_end_stays_within_bounds():
     for r in score_universe(rows):
         assert 0.0 <= r.score <= 100.0
         assert set(r.pillars) == {"quality", "safety", "governance", "valuation", "momentum"}
+
+
+# --- Layer 1: blind spots that broker reports can now fill -----------------------------------
+def test_every_mapped_blind_spot_is_a_real_one_with_real_kpis():
+    """The map is keyed by blind-spot TEXT. Editing a rulebook's wording must break this test, not
+    silently disconnect the broker data from the sector it was meant to fill."""
+    from pennystock.data.broker_reports import KPI_METRICS
+    from pennystock.data.sectors import BLIND_SPOT_KPIS
+    declared = {b for p in PROFILES for b in p.blind_spots}
+    assert set(BLIND_SPOT_KPIS) <= declared
+    assert {k for ks in BLIND_SPOT_KPIS.values() for k in ks} <= KPI_METRICS
+
+
+def test_a_blind_spot_counts_as_covered_only_when_one_of_its_kpis_has_data():
+    from pennystock.data.sectors import blind_spot_coverage
+    fin = profile_for("Financial Services", "Banks - Regional")
+    covered, missing = blind_spot_coverage(fin, {"nim_pct", "gnpa_pct", "eps"})
+    assert covered == ["net interest margin (NIM)", "GNPA/NNPA and slippage"]
+    assert "CASA ratio" in missing and "net interest margin (NIM)" not in missing
+
+
+def test_the_caveat_stops_claiming_ignorance_the_screen_no_longer_has():
+    """'Not measured here: NIM' is false once NIM is on screen - and a screen that misstates what
+    it measured is as misleading as one that hides what it skipped."""
+    bank = stock("B", sector="Financial Services", industry="Banks - Regional")
+    text = " ".join(screening_caveats(bank, covered={"nim_pct"}))
+    assert "net interest margin (NIM)" in text.split("Read from broker reports")[1]
+    assert "net interest margin (NIM)" not in text.split("Read from broker reports")[0]
+
+
+def test_the_none_of_this_is_measured_note_disappears_once_something_is():
+    bank = stock("B", sector="Financial Services", industry="Banks - Regional")
+    assert "None of those inputs is in this screen" in " ".join(screening_caveats(bank))
+    assert "None of those inputs" not in " ".join(screening_caveats(bank, covered={"gnpa_pct"}))

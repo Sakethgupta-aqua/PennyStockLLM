@@ -16,15 +16,20 @@ from pennystock.retrieval.fusion import reciprocal_rank_fusion
 
 @lru_cache(maxsize=1)
 def _embeddings():
-    import torch
     from langchain_huggingface import HuggingFaceEmbeddings
 
-    device = "mps" if torch.backends.mps.is_available() else "cpu"
-    return HuggingFaceEmbeddings(
+    from pennystock.devices import torch_device, torch_dtype
+
+    device = torch_device()
+    emb = HuggingFaceEmbeddings(
         model_name=settings.embed_model,
-        model_kwargs={"device": device},
+        model_kwargs={"device": device, "model_kwargs": {"torch_dtype": torch_dtype(device)}},
         encode_kwargs={"normalize_embeddings": True},
     )
+    # bge-m3 accepts 8,192 tokens, but a batch of 32 garbled 3,819-token passages asked the Mac's GPU for one
+    # 29.9 GB buffer and aborted the filings index (2026-10-06); real passages stay under the cap
+    emb._client.max_seq_length = settings.embed_max_tokens
+    return emb
 
 
 @lru_cache(maxsize=1)

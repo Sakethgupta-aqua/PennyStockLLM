@@ -7,23 +7,35 @@ name = "pennystock"
 version = "0.1.0"
 description = "Accountable research copilot for Indian small/micro-cap equities (paper-only)."
 requires-python = ">=3.10"
+# Every library the code imports - tests/test_packaging.py fails if this list drifts from the code.
 dependencies = [
-  "pydantic-settings",
+  "pydantic>=2",
+  "pydantic-settings>=2",
   "rapidfuzz",
   "langchain-core",
-  "langchain-community",
   "langchain-chroma",
   "langchain-huggingface",
-  "langchain-ollama",
+  "langchain-ollama>=1.1",          # `reasoning=` turns Qwen3.5 thinking on/off per role
   "langchain-text-splitters",
   "langgraph",
   "bm25s",
   "chromadb",
+  "sentence-transformers>=5,<6",   # tested on 5.4; 6.x is an untested major
+  "torch",
   "yfinance",
+  "pandas>=2.2,<3",                 # tested on 2.2; pandas 3 changes copy and string semantics
+  "requests",
+  "beautifulsoup4",
+  "pdfplumber",
+  "pypdfium2",                 # fast page text + completeness checks (filings search)
+  "pypdf",
+  "openpyxl",                       # reads the broker-report spreadsheet (fetch_midcap_reports.py)
 ]
 
 [project.optional-dependencies]
 dev = ["pytest", "pytest-cov", "ruff", "mypy"]
+# OCR for scanned book PDFs (scripts/ingest_documents.py); also needs the poppler and tesseract binaries
+ocr = ["pdf2image", "pytesseract", "Pillow"]
 
 [tool.setuptools.packages.find]
 include = ["pennystock*"]

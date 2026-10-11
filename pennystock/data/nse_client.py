@@ -39,10 +39,12 @@ HEADERS = {
 def nse_session(symbol: str, timeout: int | None = None):
     """A requests.Session primed with cookies for `symbol`'s quote page."""
     import requests
+    from urllib.parse import quote
 
     s = requests.Session()
     s.headers.update(HEADERS)
-    ref = f"{BASE}/get-quotes/equity?symbol={symbol.upper()}"
+    # encoded: "symbol=M&MFIN" would reach NSE as symbol=M plus a stray parameter, and time out
+    ref = f"{BASE}/get-quotes/equity?symbol={quote(symbol.upper(), safe='')}"
     s.headers["Referer"] = ref
     s.get(ref, timeout=timeout or settings.ownership_timeout_s)
     return s
@@ -58,4 +60,46 @@ def nse_api(session, path: str, timeout: int | None = None):
         return r.json()
     except Exception as e:
         logger.warning(f"NSE {path.split('?')[0]} failed: {type(e).__name__}: {e}")
+        return None
+
+
+class NseFeed:
+    """NSE over one cookie session that is re-primed once when a request fails - NSE drops sessions
+    without warning during long runs. `api(path)` -> parsed JSON or None; `get(url)` -> bytes or None."""
+
+    def __init__(self, prime_symbol: str = "RELIANCE"):
+        self._prime, self._s = prime_symbol, None
+
+    def _session(self):
+        if self._s is None:
+            self._s = nse_session(self._prime)
+        return self._s
+
+    def api(self, path: str):
+        import time
+        for attempt in (1, 2):
+            try:
+                answer = nse_api(self._session(), path)
+            except Exception as e:                       # priming itself can time out
+                logger.warning(f"NSE session failed: {type(e).__name__}: {e}")
+                answer = None
+            if answer is not None:
+                return answer
+            self._s = None
+            if attempt == 1:
+                time.sleep(10)
+        return None
+
+    def get(self, url: str) -> bytes | None:
+        import time
+        for attempt in (1, 2):
+            try:
+                r = self._session().get(url, timeout=settings.filings_timeout_s)
+                if r.status_code == 200:
+                    return r.content
+            except Exception as e:
+                logger.warning(f"NSE file fetch failed: {type(e).__name__}: {e}")
+            self._s = None
+            if attempt == 1:
+                time.sleep(5)
         return None

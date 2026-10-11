@@ -1,0 +1,29 @@
+# Runs on every push and pull request: the same checks you run locally, on a clean machine.
+# A clean machine is the point - it proves pyproject.toml declares everything the code imports.
+name: ci
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+      # CI has no GPU: the CPU build of torch is ~10x smaller than the default CUDA one
+      - name: Install CPU-only torch
+        run: pip install torch --index-url https://download.pytorch.org/whl/cpu
+      - name: Install the project
+        run: pip install -e ".[dev]"
+      # correctness rules only (syntax errors, undefined names); style debt is not a merge blocker
+      - name: Lint
+        run: ruff check --select E9,F63,F7,F82 pennystock scripts tests
+      # the suite needs no network, no Ollama and no model downloads
+      - name: Test
+        run: pytest -q

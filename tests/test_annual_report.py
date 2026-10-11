@@ -6,6 +6,9 @@ paragraph that merely cross-references the contingent-liability note, and figure
 with years and mangled table identifiers. The tests pin those behaviours so a future tweak to the
 patterns cannot silently undo them.
 """
+import json
+from pathlib import Path
+
 from pennystock.data.annual_report import (AnnualReportNotes, CONTINGENT, CONTINGENT_DETAIL,
                                            CONTINGENT_STRONG, RELATED_PARTY, RELATED_DETAIL,
                                            RELATED_STRONG, _section, candidate_figures,
@@ -93,3 +96,81 @@ def test_summary_carries_the_yardsticks_the_notes_are_judged_against():
     assert out["related_party_transactions"]["revenue_cr_for_comparison"] == 272642
     assert out["contingent_liabilities"]["figures_mentioned"] == ["12,740"]
     assert "NEVER as parsed totals" in out["caveat"]
+
+
+# --- the AGM notice is not the related-party note -------------------------------------------------
+def test_the_agm_notices_proposed_rpt_is_not_the_related_party_note():
+    # DIXON FY26: the AGM notice (pp. 4-55) is bound in front and its 'proposed RPT' tables won the search
+    agm = ("Dixon Technologies (India) Limited_33rd AGM Notice 2025-26\nPart A: Minimum information of the "
+           "proposed RPT\nA(3) Details of previous transactions with the related party\n"
+           "Nature of transaction: Sale of goods 2,496.66 1,159.78 4,500.00 3,200.00 2,100.00")
+    note = ("32. Related party disclosures\nTransactions with related parties\n"
+            "Nature of transaction 4,500 3,210")
+    picked = _section([agm, note], RELATED_PARTY, RELATED_DETAIL, WINDOW, RELATED_STRONG)
+    assert "4,500" in picked and "2,496.66" not in picked
+
+
+# --- the tool: verified sources first, the excerpt only as a labelled fallback ---------------------
+FIX = Path(__file__).parent / "fixtures"
+
+
+def _verified_dixon_note() -> dict:
+    from pennystock.data import contingent_liabilities as cl
+    rows = json.loads((FIX / "notes" / "dixon_note46_rows.json").read_text())
+    notes = FIX / "notes"
+    text = (notes / "dixon_p474.txt").read_text() + "\n" + (notes / "dixon_p475.txt").read_text()
+    kept, dropped = cl.verify(rows, text)
+    return {"symbol": "DIXON", "fiscal_year": "FY26", "page": 474, "basis": "consolidated", "unit": "lakh",
+            "status": cl.status_of(kept, dropped, "lakh", cl.reconcile(kept)), "rows": kept,
+            "dropped": dropped, "totals": cl.totals(kept, "lakh"), "warnings": cl.reconcile(kept)}
+
+
+def _dixon_disclosure():
+    from pennystock.data.integrated_filings import RptDisclosure, rpt_rows
+    return RptDisclosure("DIXON", "H2 FY26", "2025-10-01", "2026-03-31",
+                         rpt_rows((FIX / "xbrl" / "dixon_rpt_h2fy26.xml").read_text()),
+                         "12-May-2026 23:38:14", "u", 21182.1, "FY26 revenue minus the April-September half")
+
+
+def _wire_tool(monkeypatch, cl_result=None, rpt=None, filed=None, provider=None):
+    import ast
+    import asyncio
+
+    from pennystock.tools import market_data as md
+    monkeypatch.setattr(md, "_resolve_ticker", lambda s, e: ("DIXON.NS", "Dixon Technologies"))
+    monkeypatch.setattr(md, "stored_cl", lambda sym: cl_result)
+    monkeypatch.setattr(md, "rpt_disclosure", lambda sym: rpt)
+    monkeypatch.setattr(md, "filed_year", lambda sym: filed)
+    monkeypatch.setattr(md, "_is_lender", lambda ticker: False)
+    monkeypatch.setattr(md, "_excerpt_notes", lambda sym: AnnualReportNotes(
+        symbol="DIXON", from_yr="2025", to_yr="2026", url="http://x/ar.pdf",
+        contingent_text="not acknowledged as debt 39,841", related_party_text="Nature of Transaction 2,496"))
+    if provider is not None:
+        monkeypatch.setattr(md, "get_provider", lambda: provider)
+    return lambda: ast.literal_eval(asyncio.run(md.get_annual_report_notes.ainvoke({"symbol": "DIXON"})))
+
+
+def test_verified_claims_and_the_xbrl_disclosure_come_with_filed_yardsticks(monkeypatch):
+    from pennystock.data.integrated_filings import FiledYear
+    fy = FiledYear("DIXON", "FY26", "2026-03-31", "consolidated", 48872.8, 1438.64, 4676.67, 5386.67, 271.59,
+                   0.0, "S.N. DHAWAN & CO LLP", "12-May-2026 23:38:17", "u")
+    out = _wire_tool(monkeypatch, cl_result=_verified_dixon_note(), rpt=_dixon_disclosure(), filed=fy)()
+    assert out["contingent_liabilities"]["machine_verified"] is True
+    assert out["contingent_liabilities"]["disputed_claims_pct_of_net_worth"] == 11.3      # 530.27 / 4,676.67
+    assert out["related_party_transactions"]["source"] == "NSE Reg 23(9) XBRL"
+    assert out["yardsticks"] == {"net_worth_cr": 4676.67, "revenue_cr": 48872.8,
+                                 "source": "NSE integrated filing FY26 (12-May-2026)"}
+
+
+def test_no_structured_source_falls_back_to_the_excerpt_and_says_so(monkeypatch):
+    from pennystock.data.providers import Financials
+
+    class Provider:                     # lists run oldest -> newest: the yardstick is the LATEST year
+        def get_financials(self, ticker, years):
+            return Financials(fiscal_years=[2022, 2025, 2026], revenue_cr=[None, 38593.29, 48537.39],
+                              equity_cr=[None, 3700.0, 4668.0])
+    out = _wire_tool(monkeypatch, provider=Provider())()
+    assert out["contingent_liabilities"]["machine_verified"] is False and out["contingent_liabilities"]["why"]
+    assert "figures_mentioned" in out["contingent_liabilities"]
+    assert out["related_party_transactions"]["machine_verified"] is False
+    assert out["yardsticks"] == {"net_worth_cr": 4668.0, "revenue_cr": 48537.39, "source": "Yahoo statements"}

@@ -25,9 +25,11 @@ the cover-page facts into typed fields, and keep tables as tables.
 from __future__ import annotations
 
 import logging
+import math
 import re
 from collections import defaultdict
 from dataclasses import dataclass, field
+from datetime import date, timedelta
 from pathlib import Path
 
 logger = logging.getLogger(__name__)
@@ -65,7 +67,11 @@ RE_TARGET = re.compile(rf"\bTarget\s*(?:Price)?\s*:?\s*{MONEY}?{NUM}"
 RE_DATE = re.compile(r"\b(\d{1,2}\s+(?:Jan|Feb|Mar|Apr|May|Jun|Jul|Aug|Sep|Oct|Nov|Dec)\w*\s+20\d\d)\b", re.I)
 RE_EMAIL = re.compile(r"([A-Za-z][\w.\-]*@[\w.\-]+\.\w+)")
 RE_MCAP = re.compile(rf"Market\s*Cap\s*\(?(?:INR|Rs)\)?\s*{NUM}\s*(bn|mn|cr|crore)?", re.I)
-RE_FY = re.compile(r"\bFY\s?(\d{2})\s?([AEP])?\b")
+
+# Bumped whenever parsing changes what a PDF yields. Every stored document carries the version
+# that read it, so the next ingest re-reads anything parsed by an older, buggier parser - a fix
+# reaches old data without anyone remembering to pass --reparse.
+PARSER_VERSION = 8
 
 
 @dataclass
@@ -105,6 +111,7 @@ class BrokerReport:
     market_cap_cr: float | None = None
     analysts: list[str] = field(default_factory=list)
     estimates: dict = field(default_factory=dict)     # {"FY28E": {"eps": 378.5, ...}}
+    estimate_rows: list[EstimateRow] = field(default_factory=list)   # the same, row by row
     sections: list[Section] = field(default_factory=list)
     tables: list[Table] = field(default_factory=list)
     boilerplate_pages: list[int] = field(default_factory=list)
@@ -267,8 +274,175 @@ def parse_cover(text: str) -> dict:
     return out
 
 
-RE_FY_TOKEN = re.compile(r"\bFY\s?\d{2}\s?[AEP]?\b", re.I)
+# --------------------------------------------------------------- estimate tables
+# A column header token. FY27 / FY27E / FY2027 / Q1FY27 / 1QFY27 (Motilal) / H1FY27 / 9MFY26.
+# Month-style headers ("Sep-25") are deliberately NOT periods: in these reports they head
+# shareholding tables, and reading them as quarters would file promoter holdings as KPIs.
+RE_PERIOD = re.compile(r"(?:(?P<q>Q[1-4]|[1-4]Q|H[12]|9M)\s?)?FY\s?(?P<y>\d{4}|\d{2})\s?(?P<s>[AEP])?",
+                       re.I)
+# Motilal Oswal writes "Y/E March 2020 ... 2027E 2028E": bare years, which are fiscal years only
+# because the label says the year ends in March. A December company's "2026" is calendar 2026.
+RE_YEAR_END = re.compile(r"(?:Y/?E|Year\s*end(?:ing)?)\s*:?\s*(?P<month>[A-Za-z]{3})", re.I)
+RE_BARE_YEAR = re.compile(r"(?P<y>20\d{2})(?P<s>[AEP])?", re.I)
 RE_TRAILING_NUMS = re.compile(r"\(?-?[\d,]+(?:\.\d+)?\)?%?$")
+
+
+@dataclass(frozen=True)
+class EstimateRow:
+    """One number from one table row, with everything needed to judge it later.
+
+    `label` is the row label as printed (cleaned). It is kept because it carries the BASIS:
+    "nim on aum" and "nims (cal)" are both stored as nim_pct, and only the label says that one
+    broker divided by AUM while another used its own calculation."""
+    page: int
+    label: str
+    metric: str
+    period: str              # normalised header token, suffix kept: FY27E, Q1FY27, FY26
+    value: float
+
+
+def _quarter(m: re.Match) -> str:
+    q = (m.group("q") or "").upper()
+    return "Q" + q[0] if len(q) == 2 and q[1] == "Q" else q       # Motilal writes 1QFY27
+
+
+def _period_token(token: str) -> str | None:
+    m = RE_PERIOD.fullmatch(token.strip())
+    if not m:
+        return None
+    return f"{_quarter(m)}FY{m.group('y')[-2:]}{(m.group('s') or '').upper()}"
+
+
+def _bare_year(token: str) -> str | None:
+    m = RE_BARE_YEAR.fullmatch(token)
+    return f"FY{m.group('y')[-2:]}{(m.group('s') or '').upper()}" if m else None
+
+
+def _trailing_periods(line: str, bare_years: bool = False) -> tuple[list[str], int]:
+    """The period tokens a line ENDS with, and how many label tokens precede them."""
+    tokens = line.split()
+    periods: list[str] = []
+    while tokens and (p := _period_token(tokens[-1]) or (bare_years and _bare_year(tokens[-1]))):
+        periods.insert(0, p)
+        tokens.pop()
+    return periods, len(tokens)
+
+
+def _header_years(line: str) -> list[str] | None:
+    """Is this the column header, and if so which periods does it carry?
+
+    Returns the periods; [] for a header-shaped line whose columns cannot be mapped (a later row
+    must not be pinned to the PREVIOUS header's columns); None for a line that is not a header.
+
+    The period tokens have to be the TRAILING tokens after a short label ("Y/E March FY25A..."),
+    otherwise a data row that happens to mention a year is mistaken for a new header. A live AU SF
+    Bank run hit exactly that on 'EPS % change YoY 4.8 24.8 42.2 29.3 Earnings Revisions (%) FY27E
+    FY28E', which silently re-pointed every following row at the wrong two columns.
+    """
+    periods, label_tokens = _trailing_periods(line)
+    if not periods and (year_end := RE_YEAR_END.match(line)):
+        bare, label_tokens = _trailing_periods(line, bare_years=True)
+        if len(bare) >= 2 and label_tokens <= 6:
+            if year_end.group("month").lower() != "mar":
+                return []
+            periods = bare
+    if len(periods) < 2 or label_tokens > 6:
+        return None
+    if len(set(periods)) < len(periods):
+        # Two tables printed side by side repeat the same years ("FY25A..FY28E FY25A..FY28E"),
+        # so one set describes every row. Any other repetition is unreadable.
+        half = len(periods) // 2
+        if len(periods) % 2 == 0 and periods[:half] == periods[half:] and len(set(periods[:half])) == half:
+            return periods[:half]
+        return []
+    return periods
+
+
+def _paired_header(line: str) -> list[str] | None:
+    """Two tables side by side, each under its own label - 'Y/E 31 Mar (Rs mn) FY25A..FY29E Y/E 31
+    Mar (Rs) FY25A..FY29E' (BOB), '(Year-end March) FY25..FY28E (Year-end March) FY25..FY28E'
+    (ICICI Direct). Returns one table's periods, or None."""
+    tokens = line.split()
+    runs: list[tuple[int, int]] = []
+    i = 0
+    while i < len(tokens):
+        j = i
+        while j < len(tokens) and _period_token(tokens[j]):
+            j += 1
+        if j > i:
+            runs.append((i, j))
+        i = max(j, i + 1)
+    if len(runs) != 2:
+        return None
+    (a, b), (c, d) = runs
+    left = [_period_token(t) for t in tokens[a:b]]
+    if (len(left) < 2 or left != [_period_token(t) for t in tokens[c:d]] or d != len(tokens)
+            or a > 6 or not 0 < c - b <= 6):
+        return None
+    return left
+
+
+def _split_rows(tokens: list[str], n: int) -> list[tuple[list[str], list[str]]]:
+    """A line under a side-by-side header holds up to two rows: label, n numbers, label, n numbers.
+
+    A run of numbers SHORTER than n belongs to the label ('Tier 1 (%)'). A LONGER run is a row whose
+    digits the text layer split apart ('1 5,123' for 15,123): unreadable, so it is dropped together
+    with its label rather than guessed at."""
+    rows: list[tuple[list[str], list[str]]] = []
+    label: list[str] = []
+    i = 0
+    while i < len(tokens):
+        j = i
+        while j < len(tokens) and RE_TRAILING_NUMS.fullmatch(tokens[j]):
+            j += 1
+        if j == i:
+            label.append(tokens[i])
+            i += 1
+            continue
+        run = tokens[i:j]
+        if len(run) == n and label:
+            rows.append((label, run))
+            label = []
+        elif len(run) < n:
+            label += run
+        else:
+            label = []
+        i = j
+    return rows
+
+
+# fiscal-year end month/day, and the SEBI LODR (Reg. 33) filing deadline after it: 45 days for
+# a quarter, 60 for the full year. Until that deadline passes, an unsuffixed period is a forecast.
+_PERIOD_END = {"Q1": (6, 30, -1, 45), "Q2": (9, 30, -1, 45), "Q3": (12, 31, -1, 45),
+               "Q4": (3, 31, 0, 60), "H1": (9, 30, -1, 45), "H2": (3, 31, 0, 60),
+               "9M": (12, 31, -1, 45), "": (3, 31, 0, 60)}
+
+
+def period_info(token: str, report_date: str) -> tuple[str, str, str]:
+    """('FY26A', '2026-09-04') -> ('FY26', 'actual', '2026-03-31').
+
+    Indian fiscal years end 31 March, so FY27's Q1 ends 30 June 2026. A suffix (A / E, or P for
+    projected) is the broker's own statement and is trusted. Without one, the period counts as an
+    ACTUAL only once the company had to have filed it - otherwise a broker's FY26 column in an
+    April note is still a forecast, and ranking it as a reported fact would be wrong.
+    """
+    m = RE_PERIOD.fullmatch(token.strip())
+    if not m:
+        raise ValueError(f"not a fiscal period: {token!r}")
+    q = _quarter(m)
+    fy = 2000 + int(m.group("y")[-2:])
+    month, day, year_offset, deadline = _PERIOD_END[q]
+    end = date(fy + year_offset, month, day)
+    suffix = (m.group("s") or "").upper()
+    if suffix == "A":
+        kind = "actual"
+    elif suffix in ("E", "P"):
+        kind = "estimate"
+    else:
+        kind = "actual" if date.fromisoformat(report_date) >= end + timedelta(days=deadline) \
+            else "estimate"
+    return f"{q}FY{fy % 100:02d}", kind, end.isoformat()
+
 
 # metric -> (field name, is it money?). Money fields get unit-converted to Rs crore; ratios and
 # percentages are taken as-is. Labels are matched with any "(INR bn)" style suffix stripped off.
@@ -283,143 +457,235 @@ ESTIMATE_ROWS: dict[str, tuple[str, bool]] = {
     "net profit": ("net_profit", True), "net income (adjusted)": ("net_profit", True),
     "net income (reported)": ("net_profit", True), "adjusted pat": ("net_profit", True),
     "pat": ("net_profit", True),
-    # banks and NBFCs are measured on an entirely different set of lines
     "nii": ("net_interest_income", True), "net interest income": ("net_interest_income", True),
-    "nim": ("nim_pct", False), "nim (%)": ("nim_pct", False),
-    "gnpa": ("gnpa_pct", False), "gnpa (%)": ("gnpa_pct", False),
-    "credit cost": ("credit_cost_pct", False), "roa": ("roa_pct", False), "roa (%)": ("roa_pct", False),
     "abv": ("adjusted_book_value", False), "bvps": ("book_value", False),
     # per-share and ratios
     "eps": ("eps", False), "eps (rs)": ("eps", False), "reported eps": ("eps", False),
     "adjusted eps (diluted)": ("eps", False), "adj. eps": ("eps", False),
+    "adjusted eps": ("eps", False), "adjusted p/e": ("pe", False),
+    "dividend per share": ("dps", False), "book value per share": ("book_value", False),
     "ebitda margin": ("ebitda_margin_pct", False),
     "ebitda margins (%)": ("ebitda_margin_pct", False),
     "ebitda margin (%)": ("ebitda_margin_pct", False),
     "p/e": ("pe", False), "p/e (x)": ("pe", False), "pe (x)": ("pe", False),
     "ev/ebitda": ("ev_ebitda", False), "ev / ebitda": ("ev_ebitda", False),
     "p/bv": ("pb", False), "p/b": ("pb", False), "p/bv (x)": ("pb", False),
-    "roe": ("roe_pct", False), "roe (%)": ("roe_pct", False),
+    "roe": ("roe_pct", False), "roe (%)": ("roe_pct", False), "roae": ("roe_pct", False),
     "roce": ("roce_pct", False), "roce (%) (post tax)": ("roce_pct", False),
     "dividend per share (dps)": ("dps", False), "book value per share (bv)": ("book_value", False),
     "net debt / ebitda (x)": ("net_debt_ebitda", False),
     "effective tax rate": ("tax_rate_pct", False),
 }
 
-UNIT_TO_CRORE = {"bn": 100.0, "mn": 0.1, "cr": 1.0, "crore": 1.0, "lakh": 0.01, "lacs": 0.01}
+# The forecasts a reader looks for first - what get_broker_consensus reports as forward estimates.
+FORWARD_ESTIMATES = ("eps", "revenue_cr", "ebitda_cr", "net_profit_cr", "net_interest_income_cr")
+
+# SECTOR KPIs - the operating metrics each rulebook in sectors.py declares it cannot see. Matched
+# by pattern rather than exact label, because brokers decorate them: a section word in front
+# ("Asset Quality Credit cost"), a basis behind ("NIM on AUM", "PCR (excl. technical w/off)").
+# Everything else is anchored hard: "MFI credit cost" is a SEGMENT's number, and "Passenger car
+# (%)" in an auto maker's table must never become a bank's capital adequacy ratio.
+_SECTION = (r"(?:(?:asset quality|margins?|balance sheet|cost efficiency|efficiency|profitability|"
+            r"returns?|return ratios|key ratios|ratios|capital(?: adequacy)?|spreads?|liquidity)\s+)?")
+_BASIS = r"(?:\s+(?:ratio|on\s+[a-z.\s]+?|as\s+%\s+of\s+[a-z.\s]+?))?"
+_TAIL = r"(?:\s*\([^)]*\))*$"           # "(%)", "(excl. cgfmu)", "(bps)" - kept in the label
+
+
+def _kpi(phrase: str, *, anchored: bool = False) -> re.Pattern:
+    lead = "^" if anchored else rf"^{_SECTION}(?:total\s+)?"
+    return re.compile(rf"{lead}(?:{phrase}){_BASIS}{_TAIL}")
+
+
+KPI_ROWS: tuple[tuple[str, re.Pattern, bool], ...] = (
+    # lenders - banks and NBFCs are judged on these, and the screen had none of them
+    ("nim_pct", _kpi(r"nims?|net interest margins?"), False),
+    ("gnpa_pct", _kpi(r"gnpa|gross npas?|gs-?3|gross stage[- ]?(?:3|iii)"), False),
+    ("nnpa_pct", _kpi(r"nnpa|net npas?|ns-?3|net stage[- ]?(?:3|iii)"), False),
+    # RBI allows provision coverage with or without technical write-offs; both are printed
+    ("pcr_incl_writeoff_pct", re.compile(
+        rf"^{_SECTION}(?:pcr|provision(?:ing)? coverage(?: ratio)?)\s*"
+        r"\((?=[^)]*\bincl)(?=[^)]*\b(?:tech|tw|w/?off|write))[^)]*\)$"), False),
+    ("pcr_pct", _kpi(r"pcr|provision(?:ing)? coverage"), False),
+    ("car_pct", _kpi(r"car|crar|capital adequacy", anchored=True), False),
+    ("tier1_pct", _kpi(r"tier[- ]?(?:1|i)|cet-?1"), False),
+    ("casa_pct", _kpi(r"casa", anchored=True), False),
+    ("credit_cost_pct", _kpi(r"credit costs?"), False),
+    ("cost_to_income_pct", _kpi(r"cost[- ]?(?:to|/)[- ]?income|c/i"), False),
+    ("roa_pct", _kpi(r"roaa?", anchored=True), False),
+    # cement, metals
+    ("ebitda_per_tonne", _kpi(r"ebitda\s*(?:/|per)\s*(?:t|tn|tonne|ton|mt)"), False),
+    ("realisation_per_tonne", _kpi(r"(?:blended\s+)?reali[sz]ations?\s*(?:/|per)\s*(?:t|tn|tonne|ton|mt)"),
+     False),
+    ("capacity_util_pct", _kpi(r"capacity utili[sz]ation"), False),
+    # IT services
+    ("attrition_pct", _kpi(r"(?:ltm\s+|ttm\s+|annuali[sz]ed\s+)?attrition"), False),
+    ("book_to_bill", _kpi(r"book[- ]to[- ]bill"), False),
+    # power, refining, telecom, consumer
+    ("plf_pct", _kpi(r"plf|plant load factor"), False),
+    ("grm_usd_bbl", _kpi(r"grm|gross refining margins?"), False),
+    ("arpu", _kpi(r"(?:blended\s+)?arpu", anchored=True), False),
+    ("sssg_pct", _kpi(r"sssg|same[- ]store sales growth|lfl growth"), False),
+    ("volume_growth_pct", _kpi(r"volume growth"), False),
+    # real estate and order-book businesses - money, so a unit is mandatory
+    ("presales_cr", _kpi(r"pre[- ]?sales|sales bookings?"), True),
+    ("order_book_cr", _kpi(r"order ?book"), True),
+    ("order_inflow_cr", _kpi(r"order (?:inflows?|intake)"), True),
+)
+KPI_METRICS = frozenset(k for k, _, _ in KPI_ROWS)
+KPI_LABELS = {
+    "eps": "EPS", "revenue_cr": "Revenue cr", "ebitda_cr": "EBITDA cr", "net_profit_cr": "Net profit cr",
+    "net_interest_income_cr": "NII cr",
+    "nim_pct": "NIM %", "gnpa_pct": "GNPA %", "nnpa_pct": "NNPA %",
+    "pcr_incl_writeoff_pct": "PCR incl. write-offs %", "pcr_pct": "PCR %", "car_pct": "CRAR %",
+    "tier1_pct": "Tier-1 %", "casa_pct": "CASA %", "credit_cost_pct": "Credit cost %",
+    "cost_to_income_pct": "Cost/income %", "roa_pct": "RoA %",
+    "ebitda_per_tonne": "EBITDA/tonne", "realisation_per_tonne": "Realisation/tonne",
+    "capacity_util_pct": "Capacity use %", "attrition_pct": "Attrition %",
+    "book_to_bill": "Book-to-bill", "plf_pct": "PLF %", "grm_usd_bbl": "GRM $/bbl", "arpu": "ARPU",
+    "sssg_pct": "SSSG %", "volume_growth_pct": "Volume growth %", "presales_cr": "Pre-sales cr",
+    "order_book_cr": "Order book cr", "order_inflow_cr": "Order inflow cr",
+}
+
+
+def _row_metric(label: str) -> tuple[str, bool] | None:
+    """Canonical (metric, is_money) for a cleaned row label, or None if it is not one we keep."""
+    if label in ESTIMATE_ROWS:
+        return ESTIMATE_ROWS[label]
+    for key, pattern, is_money in KPI_ROWS:
+        if pattern.search(label):
+            return key, is_money
+    return None
+
+
+UNIT_TO_CRORE = {"billion": 100.0, "bn": 100.0, "b": 100.0, "million": 0.1, "mn": 0.1, "m": 0.1,
+                 "crores": 1.0, "crore": 1.0, "cr": 1.0, "lakhs": 0.01, "lakh": 0.01, "lacs": 0.01}
 RE_UNIT = re.compile(r"\((?:INR|Rs\.?|₹)?\s*(bn|mn|cr|crore|lakh|lacs)\.?\)", re.I)
+# A currency marker followed by a scale: "INR mn", "(INR m)", "₹ crore", and Joindre's squashed
+# "RsinMillion". The marker is required, so "users (In m)" is not mistaken for money.
+RE_UNIT_CURRENCY = re.compile(r"(?:INR|Rs\.?|₹)\s*(?:in\s*)?(billion|bn|b|million|mn|m|crores?|cr|lakhs?|lacs)\b",
+                              re.I)
 RE_PAREN_SUFFIX = re.compile(r"\s*\((?:INR|Rs\.?|₹)\s*[^)]*\)\s*$", re.I)
+
+
+def _unit_in(text: str) -> str | None:
+    m = RE_UNIT_CURRENCY.search(text) or RE_UNIT.search(text)
+    return m.group(1).lower() if m else None
 
 
 def _clean_label(tokens: list[str]) -> tuple[str, str | None]:
     """Normalised row label plus any unit written into it, e.g. 'Net Profit (INR bn)'."""
     raw = " ".join(tokens).strip()
-    unit = m.group(1).lower() if (m := RE_UNIT.search(raw)) else None
+    unit = _unit_in(raw)
     label = RE_PAREN_SUFFIX.sub("", raw).strip(" .:").lower()
     return re.sub(r"\s+", " ", label), unit
 
 
-def _header_years(line: str) -> list[str] | None:
-    """Is this the column header, and if so which fiscal years does it carry?
+# Values no company can print for the metric. A row holding one has its label on another row's
+# numbers (live: a text layer paired 'EBITDA Margins (%)' with EBITDA growth, incl. 194.7%), so
+# every number in that row is wrong, the plausible-looking ones too.
+_BOUNDS = {"ebitda_margin_pct": (-math.inf, 100.0), "gnpa_pct": (0.0, 100.0),
+           "nnpa_pct": (0.0, 100.0), "casa_pct": (0.0, 100.0), "car_pct": (0.0, 100.0),
+           "tier1_pct": (0.0, 100.0)}
 
-    The FY tokens have to be the TRAILING tokens after a short label ("Y/E March FY25A FY26A..."),
-    otherwise a data row that happens to mention a year is mistaken for a new header. A live AU SF
-    Bank run hit exactly that on 'EPS % change YoY 4.8 24.8 42.2 29.3 Earnings Revisions (%) FY27E
-    FY28E', which silently re-pointed every following row at the wrong two columns.
-    """
+
+def _is_data_row(line: str) -> bool:
     tokens = line.split()
-    years: list[str] = []
-    while tokens and RE_FY_TOKEN.fullmatch(tokens[-1]):
-        years.insert(0, tokens.pop().upper().replace(" ", ""))
-    if len(years) < 2 or len(tokens) > 6:
-        return None
-    return years
+    return bool(tokens) and bool(RE_TRAILING_NUMS.fullmatch(tokens[-1]))
 
 
-def parse_estimates_from_text(pages: list[tuple[int, str]]) -> dict:
-    """Read the financial-summary block straight out of the text, unit-aware.
+def parse_estimate_rows(pages: list[tuple[int, str]]) -> list[EstimateRow]:
+    """Every recognised row of every estimate table, in reading order, unit-aware.
 
     pdfplumber's table finder is unusable on these cover pages: ICICI draws the layout in coloured
     boxes, so `find_tables()` returns ONE 52-row "table" holding the whole page, prose included.
-    The block is easy to read as text - a header line of fiscal years, then label-plus-N-numbers
-    rows - and that shape holds across every broker seen so far.
+    The block is easy to read as text - a header line of periods, then label-plus-N-numbers rows -
+    and that shape holds across every broker seen so far.
 
-    Units MUST be honoured. ICICI Securities quotes INR mn, its banking notes quote INR bn, and
-    ICICI Direct quotes Rs crore. Assuming one of them turns a Rs 2,110 crore profit into Rs 2.11
-    crore.
+    Units MUST be honoured, and are looked for on the row label, the header line, then the caption
+    line directly above the header ("Income statement (INR m)"). A money row whose unit is still
+    unknown is DROPPED: assuming crore stored Trent's revenue ten times too large. Ratios and
+    per-share figures carry no unit and are always kept.
     """
-    est: dict[str, dict] = {}
-    for _, text in pages:
-        years: list[str] = []
+    out: list[EstimateRow] = []
+    for page_no, text in pages:
+        periods: list[str] = []
         table_unit: str | None = None
+        side_by_side = False
+        prev = ""
         for raw in text.splitlines():
             line = " ".join(raw.split())
             if not line:
                 continue
-            if (found := _header_years(line)) is not None:
-                years = found
-                table_unit = m.group(1).lower() if (m := RE_UNIT.search(line)) else None
+            pair = _paired_header(line)
+            found = pair if pair is not None else _header_years(line)
+            caption, prev = prev, line
+            if found is not None:
+                periods = found
+                # two tables share this header: a money row cannot be told apart from a ratio
+                # row of the other table, so only unit-free rows are read below it
+                side_by_side = pair is not None or len(_trailing_periods(line)[0]) > len(found)
+                table_unit = _unit_in(line) or (
+                    _unit_in(caption) if caption and not _is_data_row(caption) else None)
                 continue
-            if not years:
+            if not periods:
                 continue
             tokens = line.split()
-            nums: list[str] = []
-            while tokens and RE_TRAILING_NUMS.fullmatch(tokens[-1]):
-                nums.insert(0, tokens.pop())
-            if len(nums) != len(years) or not tokens:
-                continue
-            label, row_unit = _clean_label(tokens)
-            entry = ESTIMATE_ROWS.get(label)
-            if not entry:
-                continue
-            key, is_money = entry
-            scale = UNIT_TO_CRORE.get(row_unit or table_unit or "", 1.0) if is_money else 1.0
-            for fy, raw_val in zip(years, nums):
-                v = raw_val.replace(",", "").replace("%", "")
-                neg = v.startswith("(") and v.endswith(")")
-                try:
-                    val = float(v.strip("()"))
-                except ValueError:
-                    continue
-                val = -val if neg else val
-                est.setdefault(fy, {})[key + ("_cr" if is_money else "")] = round(val * scale, 2)
-    return est
+            if side_by_side:
+                candidates = _split_rows(tokens, len(periods))
+            else:
+                nums: list[str] = []
+                while tokens and RE_TRAILING_NUMS.fullmatch(tokens[-1]):
+                    nums.insert(0, tokens.pop())
+                candidates = [(tokens, nums)] if len(nums) == len(periods) and tokens else []
+            for label_tokens, nums in candidates:
+                out.extend(_row_values(page_no, label_tokens, nums, periods, table_unit, side_by_side))
+    return out
 
 
-def parse_estimates(tables: list[Table]) -> dict:
-    """Forward estimates out of the financial-summary table, keyed by fiscal year.
+def _row_values(page_no: int, label_tokens: list[str], nums: list[str], periods: list[str],
+                table_unit: str | None, side_by_side: bool) -> list[EstimateRow]:
+    """One table row's numbers as EstimateRows - or none, if the row is not one we keep."""
+    label, row_unit = _clean_label(label_tokens)
+    entry = _row_metric(label)
+    if not entry:
+        return []
+    key, is_money = entry
+    if is_money:
+        unit = row_unit or table_unit
+        if unit not in UNIT_TO_CRORE or side_by_side:
+            return []                                 # unknown scale: never guess crore
+        scale = UNIT_TO_CRORE[unit]
+        key = key if key.endswith("_cr") else key + "_cr"
+    else:
+        # "Credit cost (bps) 80" is 0.80%: a percentage KPI quoted in basis points
+        scale = 0.01 if key.endswith("_pct") and re.search(r"\bbps?\b", label) else 1.0
+    values: list[tuple[str, float]] = []
+    for period, raw_val in zip(periods, nums):
+        v = raw_val.replace(",", "").replace("%", "")
+        neg = v.startswith("(") and v.endswith(")")
+        try:
+            val = float(v.strip("()"))
+        except ValueError:
+            continue
+        values.append((period, round((-val if neg else val) * scale, 4)))
+    low, high = _BOUNDS.get(key, (-math.inf, math.inf))
+    if any(not low <= val <= high for _, val in values):
+        return []
+    return [EstimateRow(page=page_no, label=label, metric=key, period=period, value=val)
+            for period, val in values]
 
-    This is the payload. Everything else in this system is historical - filed accounts, past
-    prices, past ratios. FY27E and FY28E revenue, EBITDA and EPS are the only forward-looking
-    numbers available anywhere in it, and a target price is meaningless without the estimate that
-    produced it.
-    """
-    wanted = {
-        "net revenue": "revenue", "net sales": "revenue", "revenue": "revenue",
-        "ebitda": "ebitda", "ebitda (%)": "ebitda_margin", "ebitda margin (%)": "ebitda_margin",
-        "net profit": "net_profit", "net income (adjusted)": "net_profit",
-        "adjusted eps (diluted)": "eps", "eps (rs)": "eps", "reported eps": "eps",
-        "p/e (x)": "pe", "p/e": "pe", "ev/ebitda (x)": "ev_ebitda", "ev / ebitda": "ev_ebitda",
-        "roe (%)": "roe", "roce (%) (post tax)": "roce", "rocE (%)".lower(): "roce",
-    }
+
+def estimates_by_period(rows: list[EstimateRow]) -> dict:
+    """The rows as {period: {metric: value}} - the shape the chunk text and the ledger payload use.
+    A later row for the same period and metric overwrites an earlier one."""
     est: dict[str, dict] = {}
-    for t in tables:
-        for row in t.rows:
-            if not row or not row[0]:
-                continue
-            years = [c for c in row if c and RE_FY.fullmatch(c.strip())]
-            if len(years) >= 2:                       # this row is the header: FY25A FY26A FY27E
-                header = [c.strip() if c else "" for c in row]
-                cols = {i: c for i, c in enumerate(header) if RE_FY.fullmatch(c)}
-                for r in t.rows:
-                    if not r or not r[0]:
-                        continue
-                    key = wanted.get(re.sub(r"\s+", " ", r[0]).strip().lower())
-                    if not key:
-                        continue
-                    for i, fy in cols.items():
-                        if i < len(r) and (v := _num((r[i] or "").replace("(", "-").replace(")", ""))) is not None:
-                            est.setdefault(fy, {})[key] = v
+    for r in rows:
+        est.setdefault(r.period, {})[r.metric] = round(r.value, 2)
     return est
+
+
+def parse_estimates_from_text(pages: list[tuple[int, str]]) -> dict:
+    return estimates_by_period(parse_estimate_rows(pages))
 
 
 # ---------------------------------------------------------------- tables & sections
@@ -468,19 +734,43 @@ def _is_heading(line: str) -> bool:
     return 1 <= len(s.split()) <= 12
 
 
+RE_NUMBERISH = re.compile(r"^\(?[-+]?[\d,]*\.?\d+\)?(?:%|x|bps)?\.?$|^(?:[1-4]Q|Q[1-4]|H[12]|9M)?FY\d{2,4}[AEP]?$",
+                          re.I)
+
+
+def _is_chart_residue(line: str) -> bool:
+    """A chart's axis labels and data labels, or an exhibit's source caption - not prose.
+
+    pdfplumber extracts a chart as lines of bare numbers ("18.0 16.4 15.8 ... 0.0") and years
+    ("FY18 FY19 ... Q1FY27"). Mixed into a section they crowd out the argument at retrieval time,
+    and the numbers a reader needs are already in broker_metrics."""
+    if line.lower().startswith("source:"):
+        return True
+    tokens = line.split()
+    numeric = sum(1 for t in tokens if RE_NUMBERISH.match(t))
+    # all-numeric at any length (axis labels often print one per line), or mostly numeric
+    return numeric == len(tokens) or (len(tokens) >= 3 and numeric / len(tokens) >= 0.6)
+
+
 def split_sections(text: str, page_no: int) -> list[Section]:
     """Narrative split on its own headings, so a chunk is a complete argument rather than an
     arbitrary window of characters that begins and ends mid-sentence."""
     sections, heading, buf = [], "", []
-    for raw in text.splitlines():
-        line = raw.strip()
-        if not line:
-            continue
+    lines = [raw.strip() for raw in text.splitlines()
+             if raw.strip() and not _is_chart_residue(raw.strip())]
+    for i, line in enumerate(lines):
+        nxt = lines[i + 1] if i + 1 < len(lines) else ""
+        # A wrapped line of a narrow column is short and unpunctuated too, so it only counts as a
+        # heading when the paragraph before it has ENDED and what follows starts a new sentence.
+        # Without this, '...RoA expanded to 1.8% by Q4FY26 and' was read as a heading and the
+        # paragraph was cut mid-sentence.
+        heads = (_is_heading(line) and not nxt[:1].islower()
+                 and (not buf or buf[-1].endswith((".", "!", "?", ":"))))
         # a heading only counts when real prose follows it
-        if _is_heading(line) and len(" ".join(buf)) > 120:
+        if heads and len(" ".join(buf)) > 120:
             sections.append(Section(heading=heading, text=" ".join(buf), page=page_no))
             heading, buf = line, []
-        elif _is_heading(line) and not buf:
+        elif heads and not buf:
             heading = line
         else:
             buf.append(line)
@@ -518,7 +808,8 @@ def extract_report(path: str | Path) -> BrokerReport:
             if v not in (None, [], ""):
                 setattr(rep, k, v)
         rep.company, rep.sector, rep.report_type = _identity(pages[0][1])
-    rep.estimates = parse_estimates_from_text(pages)
+    rep.estimate_rows = parse_estimate_rows(pages)
+    rep.estimates = estimates_by_period(rep.estimate_rows)
     return rep
 
 
@@ -657,7 +948,8 @@ def to_chunks(rep: BrokerReport, max_chars: int = 1800) -> list[dict]:
         # the last few characters of every section whose length was just over a chunk boundary,
         # which is exactly the kind of quiet truncation that is impossible to notice later.
         if len(pieces) > 1 and len(pieces[-1]) < 80:
-            pieces[-2] += pieces.pop()
+            tail = pieces.pop()        # pop FIRST: `pieces[-2] += pieces.pop()` resolves [-2] early
+            pieces[-1] += tail
         for piece in pieces:
             if len(piece) < 80 and len(pieces) == 1:
                 continue

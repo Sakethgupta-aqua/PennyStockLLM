@@ -31,3 +31,26 @@ def test_cap_keeps_best_first_order():
 def test_reorder_puts_best_at_both_ends():
     docs = [Document(page_content=str(i)) for i in range(5)]
     assert [d.page_content for d in reorder_lost_in_middle(docs)] == ["0", "2", "4", "3", "1"]
+
+
+def test_the_reranker_reads_a_whole_filing_passage(monkeypatch):
+    # at 512 tokens it never saw the second half of ~800-token annual-report passages and pushed four right
+    # answers out of the top 10; reading 1,024 lifted filings MRR 0.798 -> 0.830 on 106 questions (2026-10-07)
+    import sys
+    import types
+
+    from pennystock.retrieval import rerank as rr
+    seen = {}
+
+    class FakeCrossEncoder:
+        def __init__(self, name, device=None, max_length=None, **kwargs):
+            seen["max_length"] = max_length
+    fake = types.ModuleType("sentence_transformers")       # the real import is slow and noisy
+    fake.CrossEncoder = FakeCrossEncoder
+    monkeypatch.setitem(sys.modules, "sentence_transformers", fake)
+    rr._reranker.cache_clear()
+    try:
+        rr._reranker()
+    finally:
+        rr._reranker.cache_clear()
+    assert seen["max_length"] == rr.settings.rerank_max_tokens == 1024

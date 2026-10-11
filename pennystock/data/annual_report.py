@@ -50,6 +50,11 @@ CONTINGENT_DETAIL = re.compile(r"claims?\s+against|not\s+acknowledged\s+as\s+deb
 CONTINGENT_STRONG = re.compile(r"not\s+acknowledged\s+as\s+debt", re.I)
 
 RELATED_PARTY = re.compile(r"related\s+part(?:y|ies)", re.I)
+# the AGM notice is often bound in front of the annual report; its proposed-RPT resolutions read like the
+# related-party note and won the search (DIXON FY26: pp. 4-55, 'Part A: Minimum information of the proposed
+# RPT')
+AGM_HEADER = re.compile(r"\bAGM\s+Notice\b|notice\s+of\s+(the\s+)?\d*\w*\s*annual\s+general\s+meeting", re.I)
+AGM_BODY = re.compile(r"minimum\s+information\s+of\s+the\s+proposed\s+rpt|notice\s+is\s+hereby\s+given", re.I)
 RELATED_DETAIL = re.compile(r"transactions?\s+with\s+related|key\s+manage(?:ment|rial)\s+personnel"
                             r"|holding\s+company|fellow\s+subsidiar", re.I)
 # the transactions TABLE, as opposed to the page that merely lists related parties by name
@@ -125,6 +130,8 @@ def _section(pages: list[str], head: re.Pattern, detail: re.Pattern, window: int
     """
     best, best_score = "", (-1, -1, -1, -1)
     for text in pages:
+        if AGM_HEADER.search(text[:400]) or AGM_BODY.search(text):
+            continue
         # `strong` is a stricter signal than `detail`, so it has to SATISFY the gate as well as win
         # the ranking. Without this, Hindalco's own wording - "the following transactions were
         # carried out with the related parties" - failed the narrower detail pattern and the real
@@ -209,6 +216,16 @@ def fetch_notes(symbol: str, refresh: bool = False) -> AnnualReportNotes:
                      notes.related_party_text, notes.pages,
                      datetime.now().isoformat(timespec="seconds")))
     return notes
+
+
+def notes_from_pages(symbol: str, pages: list[str], url: str | None, from_yr: str | None,
+                     to_yr: str | None) -> AnnualReportNotes:
+    """The two notes from page texts already extracted (filings.db) - no download."""
+    return AnnualReportNotes(symbol=symbol, from_yr=from_yr, to_yr=to_yr, url=url, pages=len(pages),
+                             contingent_text=_section(pages, CONTINGENT, CONTINGENT_DETAIL,
+                                                      settings.annual_report_window, CONTINGENT_STRONG),
+                             related_party_text=_section(pages, RELATED_PARTY, RELATED_DETAIL,
+                                                         settings.annual_report_window, RELATED_STRONG))
 
 
 def summarize_notes(notes: AnnualReportNotes, net_worth_cr: float | None = None,

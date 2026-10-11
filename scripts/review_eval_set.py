@@ -13,6 +13,7 @@ wrapped to your terminal, with the long source_text hidden until you ask for it.
   python scripts/review_eval_set.py --unverify 4
   python scripts/review_eval_set.py --drop 2,9      # delete bad rows for good
   python scripts/review_eval_set.py --pending       # only the rows still needing a decision
+  python scripts/review_eval_set.py --file eval/filings_golden.jsonl --pending   # the filings set
 """
 from __future__ import annotations
 
@@ -28,23 +29,33 @@ GOLDEN = ROOT / "eval" / "golden_set.jsonl"
 KEY_ORDER = ["verified", "source_book", "question", "reference_answer", "source_id", "source_text"]
 
 
-def load() -> list[dict]:
-    if not GOLDEN.exists():
-        print(f"No golden set at {GOLDEN}. Run scripts/build_eval_set.py first.")
+def load(path: Path = GOLDEN) -> list[dict]:
+    if not path.exists():
+        print(f"No golden set at {path}. Run scripts/build_eval_set.py (or build_filings_eval.py) first.")
         sys.exit(0)
-    return [json.loads(l) for l in GOLDEN.read_text().splitlines() if l.strip()]
+    return [json.loads(l) for l in path.read_text().splitlines() if l.strip()]
 
 
-def save(rows: list[dict]) -> None:
-    GOLDEN.write_text("".join(
-        json.dumps({k: r[k] for k in KEY_ORDER if k in r}, ensure_ascii=False) + "\n" for r in rows))
+def save(rows: list[dict], path: Path = GOLDEN) -> None:
+    # the fields you read first, any others (the filings set's symbol, pages, file hash) next, the long
+    # source passage last - and never drop a field the file already had
+    def ordered(r: dict) -> dict:
+        head = [k for k in KEY_ORDER if k in r and k != "source_text"]
+        tail = ["source_text"] if "source_text" in r else []
+        return {k: r[k] for k in head + [k for k in r if k not in head + tail] + tail}
+    path.write_text("".join(json.dumps(ordered(r), ensure_ascii=False) + "\n" for r in rows))
+
+
+def group(r: dict) -> str:
+    """The BOOK column: the source book, or - in the filings set - the document type."""
+    return r.get("source_book") or r.get("doc_type") or "?"
 
 
 def short_books(rows: list[dict]) -> dict[str, str]:
     """Stable short codes so the book column stays narrow and content gets the space."""
     codes, used = {}, set()
     for r in rows:
-        b = r.get("source_book", "?")
+        b = group(r)
         if b in codes:
             continue
         stem = Path(b).stem.replace("dokumen.pub_", "").replace("_", "-")
@@ -79,9 +90,12 @@ def main() -> int:
     ap.add_argument("--verify-all", action="store_true")
     ap.add_argument("--drop", help="comma-separated row numbers to delete permanently")
     ap.add_argument("--pending", action="store_true", help="list only rows not yet verified")
+    ap.add_argument("--file", type=Path, default=GOLDEN,
+                    help="the JSONL set to review (default: the book set)")
     args = ap.parse_args()
+    path = args.file if args.file.is_absolute() else ROOT / args.file
 
-    rows = load()
+    rows = load(path)
     n = len(rows)
 
     if args.show:
@@ -90,7 +104,7 @@ def main() -> int:
         r = rows[args.show - 1]
         width = min(shutil.get_terminal_size((110, 24)).columns, 118)
         print("=" * width)
-        print(f"ROW {args.show}/{n}   verified={r.get('verified')}   {r.get('source_book')}")
+        print(f"ROW {args.show}/{n}   verified={r.get('verified')}   {group(r)}")
         print("=" * width)
         for label, key in (("QUESTION", "question"), ("ANSWER", "reference_answer"),
                            ("SOURCE PASSAGE", "source_text")):
@@ -113,8 +127,8 @@ def main() -> int:
             dropped = n - len(keep)
             rows = [r for i, r in enumerate(rows) if i in keep]
             print(f"deleted {dropped} row(s)")
-        save(rows)
-        rows = load()
+        save(rows, path)
+        rows = load(path)
         n = len(rows)
 
     width = min(shutil.get_terminal_size((110, 24)).columns, 118)
@@ -128,7 +142,7 @@ def main() -> int:
     for i, r in listing:
         mark = "OK" if r.get("verified") else "."
         q = textwrap.wrap(" ".join(str(r.get("question", "")).split()), qwidth) or [""]
-        print(f"{i:>3} {mark:^3} {codes.get(r.get('source_book','?'), '?'):<5} {q[0]}")
+        print(f"{i:>3} {mark:^3} {codes.get(group(r), '?'):<5} {q[0]}")
         for cont in q[1:]:
             print(f"{'':>3} {'':^3} {'':<5} {cont}")
         if args.answers:
@@ -140,7 +154,9 @@ def main() -> int:
     print(f"{n} rows | {done} verified | {n - done} pending")
     print("  legend: " + "  ".join(f"{c}={Path(b).stem[:26]}" for b, c in codes.items()))
     if n - done:
-        print("\n  verify with:  python scripts/review_eval_set.py --verify 1,2,5")
+        shown = path.relative_to(ROOT) if path.is_relative_to(ROOT) else path
+        flag = "" if path == GOLDEN else f" --file {shown}"
+        print(f"\n  verify with:  python scripts/review_eval_set.py{flag} --verify 1,2,5")
     return 0
 
 

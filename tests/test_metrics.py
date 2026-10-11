@@ -122,3 +122,21 @@ def test_pe_check_ignores_loss_making_and_missing_cases():
     assert mt._sanity_check_pe("X", None, 1000.0, _FinNI([100.0])) is None     # nothing reported
     assert mt._sanity_check_pe("X", 20.0, None, _FinNI([100.0])) == 20.0       # no market cap
     assert mt._sanity_check_pe("X", 20.0, 1000.0, _FinNI([])) == 20.0          # no profit data
+
+
+# --- the 'Infinity' bug: a feed's non-number must never reach the ranking --------------------
+def test_a_non_finite_feed_value_is_stored_as_unknown():
+    """yfinance returns the STRING 'Infinity' for the P/E of a near-zero-earnings company. Four such
+    rows crashed `screen.py --no-vetoes`: sorting mixed text and numbers raises TypeError."""
+    save_metrics([StockMetrics(symbol="AVROIND", pe="Infinity", pb=float("inf"), roce_pct=12.0)])
+    got = load_metrics()[0]
+    assert (got.pe, got.pb, got.roce_pct) == (None, None, 12.0)
+
+
+def test_text_already_stored_in_a_numeric_column_reads_back_as_unknown():
+    """The four bad rows are already in market.db; reading must clean them without a re-fetch."""
+    save_metrics([StockMetrics(symbol="ESSENTIA", pe=10.0)])
+    with sqlite3.connect(mt.settings.market_db) as con:
+        con.execute("UPDATE stock_metrics SET pe = 'Infinity', piotroski = 'n/a'")
+    got = load_metrics()[0]
+    assert (got.pe, got.piotroski) == (None, None)

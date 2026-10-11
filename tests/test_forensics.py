@@ -182,3 +182,13 @@ def test_effective_tax_rate_skips_loss_years_instead_of_going_negative():
 def test_effective_tax_rate_with_no_profitable_year():
     out = effective_tax_rate(_fin(tax_provision_cr=[5], pretax_income_cr=[-800]))
     assert out["effective_tax_rate_pct"] is None
+
+
+def test_emerging_market_altman_states_its_own_zone_boundaries():
+    # the live DIXON report (2026-10-11) added '>2.99 is safe' - the 1968 model's line, not this variant's 2.6
+    heavy = Financials(fiscal_years=[2026], total_assets_cr=[10000], current_assets_cr=[3000],
+                       current_liabilities_cr=[2000], retained_earnings_cr=[3000],
+                       operating_income_cr=[1200], total_liabilities_cr=[5000],
+                       equity_cr=[5000], revenue_cr=[3000])
+    em = altman_z_emerging(heavy)
+    assert (em["safe_above"], em["distress_below"]) == (2.6, 1.1)

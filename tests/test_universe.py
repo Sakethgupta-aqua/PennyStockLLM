@@ -21,14 +21,18 @@ def test_is_stale_respects_threshold():
 def test_ensure_fresh_never_raises_when_the_network_fails():
     universe._checked_this_process = False
     with patch.object(universe, "is_stale", return_value=True), \
+         patch.object(universe, "last_updated", return_value=datetime(2026, 9, 1)), \
          patch.object(universe, "fetch_master", side_effect=ConnectionError("NSE down")):
         status = universe.ensure_fresh(force=True)
     assert "FAILED" in status and "cached universe" in status      # degrades, does not crash
 
 
 def test_ensure_fresh_skips_work_when_fresh():
+    # last_updated is patched too: unpatched it read the REAL market.db, so this test passed only on a
+    # machine that already had a universe table - a clean CI checkout crashed formatting None as a date
     universe._checked_this_process = False
     with patch.object(universe, "is_stale", return_value=False), \
+         patch.object(universe, "last_updated", return_value=datetime(2026, 10, 1)), \
          patch.object(universe, "fetch_master", side_effect=AssertionError("must not fetch")):
         assert "fresh" in universe.ensure_fresh()
 
